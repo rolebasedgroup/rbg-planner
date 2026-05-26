@@ -84,43 +84,40 @@ Correction factors continuously adjust predictions based on observed vs. expecte
 
 ## Quick Start
 
-This guide walks through the full workflow: generate profiling data, create a planner-integrated RBG deployment, apply it to the cluster, and observe the planner behavior.
+This guide walks through the full workflow: generate a planner-integrated RBG deployment, apply it to the cluster, and observe the planner behavior.
 
 ### Prerequisites
 
 - Kubernetes cluster with [RBG controller](https://github.com/rolebasedgroup/rbg) installed
 - `kubectl` configured to access the cluster
-- `rbg-cli` installed (includes `inference-ext-cli`)
+- `inference-ext-cli` installed (`pip install inference-ext-cli`)
 - Prometheus monitoring stack deployed
 
-### Step 1: Prepare Profiling Data
+### Step 1: Generate Deployment YAML
 
-Option A — **Run SLA profiling via rbg-cli** (automated, recommended):
+Use `inference-ext-cli generate --enable-planner` to produce a complete deployment with the planner role injected. The command supports multiple profiling data sources:
+
+**Option A** — Auto-profiling (deploys temporary instances, benchmarks, collects data automatically):
 
 ```bash
-rbg-cli inference profile \
+inference-ext-cli generate \
+  --rbg-yaml ./my-sglang-pd.yaml \
+  --enable-planner \
+  --planner-image ghcr.io/rolebasedgroup/rbg-planner:latest \
+  --model-name "Qwen/Qwen3-0.6B" \
+  --profiling-source auto \
   --engine sglang \
-  --model "Qwen/Qwen3-0.6B" \
   --engine-image "lmsysorg/sglang:latest" \
   --namespace profiling \
-  --min-gpus 1 --max-gpus 4 \
-  --ttft-sla 200 --itl-sla 20 \
-  --output-dir ./profiling-results
+  --min-gpus 1 \
+  --max-gpus 4 \
+  --ttft-sla 200 \
+  --itl-sla 20 \
+  --max-gpu-budget 8 \
+  -o ./output/
 ```
 
-This deploys temporary RBG instances, runs benchmarks at various GPU configurations, selects optimal parallelization, performs interpolation sweeps, and produces `prefill_raw_data.json` + `decode_raw_data.json`.
-
-Option B — **Use existing profiling data** from AIC or prior runs:
-
-```bash
-ls ./profiling-results/
-# prefill_raw_data.json
-# decode_raw_data.json
-```
-
-### Step 2: Generate Deployment YAML
-
-Use `inference-ext-cli generate` to produce a complete deployment with the planner role injected:
+**Option B** — From existing profiling JSON files (from prior runs or AIC):
 
 ```bash
 inference-ext-cli generate \
@@ -129,11 +126,26 @@ inference-ext-cli generate \
   --planner-image ghcr.io/rolebasedgroup/rbg-planner:latest \
   --model-name "Qwen/Qwen3-0.6B" \
   --profiling-source json \
-  --prefill-json ./profiling-results/prefill_raw_data.json \
-  --decode-json ./profiling-results/decode_raw_data.json \
+  --prefill-json ./prefill_raw_data.json \
+  --decode-json ./decode_raw_data.json \
   --ttft-sla 200 \
   --itl-sla 20 \
   --max-gpu-budget 8 \
+  -o ./output/
+```
+
+**Option C** — Reference an existing ConfigMap already deployed in the cluster:
+
+```bash
+inference-ext-cli generate \
+  --rbg-yaml ./my-sglang-pd.yaml \
+  --enable-planner \
+  --planner-image ghcr.io/rolebasedgroup/rbg-planner:latest \
+  --model-name "Qwen/Qwen3-0.6B" \
+  --profiling-source configmap \
+  --profiling-configmap profiling-data \
+  --ttft-sla 200 \
+  --itl-sla 20 \
   -o ./output/
 ```
 
@@ -141,10 +153,10 @@ Output:
 ```
 output/
 ├── rbg.yaml                  # RBG with prefill + decode + planner roles
-└── profiling-configmap.yaml  # ConfigMap with profiling data
+└── profiling-configmap.yaml  # ConfigMap with profiling data (auto/json sources only)
 ```
 
-### Step 3: Deploy to Cluster
+### Step 2: Deploy to Cluster
 
 ```bash
 # Apply profiling ConfigMap
@@ -168,7 +180,7 @@ sglang-pd-inference-decode-0    1/1     Running   2m
 sglang-pd-inference-planner-0   1/1     Running   2m
 ```
 
-### Step 4: Observe Planner Behavior
+### Step 3: Observe Planner Behavior
 
 Watch the planner logs:
 
@@ -208,7 +220,7 @@ Watch RBG replicas change in real-time:
 kubectl get rbg sglang-pd-inference -w
 ```
 
-### Step 5: Monitor via Prometheus (Optional)
+### Step 4: Monitor via Prometheus (Optional)
 
 If `PLANNER_PROMETHEUS_PORT` is enabled (default: 9091), query planner metrics:
 
