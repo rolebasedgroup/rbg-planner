@@ -4,6 +4,10 @@ SLA-based autoscaler for [RoleBasedGroup](https://github.com/rolebasedgroup) Pre
 
 The RBG Planner automatically scales Prefill and Decode roles within a RoleBasedGroup to meet TTFT (Time to First Token) and ITL (Inter-Token Latency) SLA targets using performance profiling data, load prediction, and real-time correction factors.
 
+## Acknowledgements
+
+The core planning algorithm, SLA profiling methodology, and performance interpolation approach in this project are derived from [NVIDIA Dynamo](https://github.com/ai-dynamo/dynamo). We are deeply grateful to the Dynamo team for their pioneering work on SLA-driven autoscaling for disaggregated inference. The Dynamo planner's design — combining offline profiling with online prediction and correction factors — forms the foundation of RBG Planner. This project adapts and re-implements those ideas to work natively with the Kubernetes RoleBasedGroup API, removing Dynamo runtime dependencies (etcd, NATS, DistributedRuntime) and making the approach available as a standalone, lightweight component for any RBG-based deployment.
+
 ## Architecture
 
 ```
