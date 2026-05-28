@@ -72,6 +72,10 @@ class PlannerPrometheusMetrics:
         self.observed_osl = Gauge(
             f"{prefix}_observed_osl", "Observed output sequence length"
         )
+        self.observed_request_duration = Gauge(
+            f"{prefix}_observed_request_duration_seconds",
+            "Observed request duration (s)",
+        )
         self.p_correction_factor = Gauge(
             f"{prefix}_p_correction_factor", "Prefill correction factor"
         )
@@ -124,7 +128,6 @@ class Planner:
         self.metrics_client = PrometheusMetricsClient(
             url=config.prometheus_endpoint,
             metric_source=config.metric_source,
-            namespace=config.rbg_namespace,
         )
 
         # Load predictors
@@ -219,6 +222,9 @@ class Planner:
             )
             self.prom_metrics.observed_isl.set(self.last_metrics.isl)
             self.prom_metrics.observed_osl.set(self.last_metrics.osl)
+            self.prom_metrics.observed_request_duration.set(
+                self.last_metrics.request_duration or 0
+            )
 
             # Track GPU hours
             interval_gpu_hours = (

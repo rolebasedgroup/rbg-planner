@@ -260,13 +260,13 @@ standard TP, selecting the best strategy for each phase.
 }
 ```
 
-**decode_raw_data.json:**
+**decode_raw_data.json** (scatter-point format — all arrays must be equal length):
 ```json
 {
-  "x_kv_usage": [0.05, 0.1, 0.2, 0.3, 0.5, 0.7, 0.9],
-  "y_context_length": [256, 512, 1024, 2048, 4096],
-  "z_itl": [0.008, 0.010, 0.012, 0.015, 0.020, 0.025, 0.035],
-  "z_thpt_per_gpu": [1200, 1100, 1000, 900, 800, 700, 500],
+  "x_kv_usage": [0.02, 0.05, 0.10, 0.20, 0.35, 0.50, 0.70, 0.90],
+  "y_context_length": [350, 350, 700, 700, 1400, 1400, 2800, 2800],
+  "z_itl": [0.006, 0.008, 0.009, 0.012, 0.017, 0.022, 0.035, 0.055],
+  "z_thpt_per_gpu": [1500, 1350, 1250, 1050, 750, 550, 400, 250],
   "max_kv_tokens": 32768
 }
 ```

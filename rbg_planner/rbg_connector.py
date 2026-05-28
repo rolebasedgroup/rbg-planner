@@ -49,6 +49,17 @@ class RBGConnector(PlannerConnector):
     ):
         try:
             config.load_incluster_config()
+            # Workaround: kubernetes client v36 sets api_key['authorization']
+            # with lowercase 'bearer' prefix, but the REST client expects
+            # api_key['BearerToken']. Copy the token to the correct key.
+            from kubernetes.client import Configuration
+            cfg = Configuration.get_default_copy()
+            token = cfg.api_key.get('authorization', '')
+            if token.startswith(('bearer ', 'Bearer ')):
+                token = token.split(' ', 1)[1]
+            cfg.api_key['BearerToken'] = token
+            cfg.api_key_prefix['BearerToken'] = 'Bearer'
+            Configuration.set_default(cfg)
         except ConfigException:
             config.load_kube_config()
 

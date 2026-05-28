@@ -279,21 +279,80 @@ The profiling data is mounted as a Kubernetes ConfigMap with two JSON files:
 
 ## Prometheus Metrics
 
-When `PLANNER_PROMETHEUS_PORT` is set (e.g., `9091`), the planner exposes:
+When `PLANNER_PROMETHEUS_PORT` is set (e.g., `9091`), the planner exposes its own Prometheus metrics at `/metrics`. These metrics provide full observability into the planner's decision-making process.
+
+### Worker Counts & GPU Usage
 
 | Metric | Description |
 |--------|-------------|
 | `rbg_planner_num_prefill_workers` | Current prefill replica count |
 | `rbg_planner_num_decode_workers` | Current decode replica count |
-| `rbg_planner_observed_ttft_ms` | Last observed TTFT |
-| `rbg_planner_observed_itl_ms` | Last observed ITL |
+| `rbg_planner_gpu_hours_total` | Cumulative GPU hours used since planner start |
+
+### Observed Metrics
+
+Metrics observed from the inference endpoints via Prometheus in each adjustment interval:
+
+| Metric | Description |
+|--------|-------------|
+| `rbg_planner_observed_ttft_ms` | Observed average Time to First Token (ms) |
+| `rbg_planner_observed_itl_ms` | Observed average Inter-Token Latency (ms) |
 | `rbg_planner_observed_request_rate` | Observed request rate (req/s) |
-| `rbg_planner_predicted_request_rate` | Predicted request rate |
-| `rbg_planner_predicted_num_prefill` | Predicted prefill replicas |
-| `rbg_planner_predicted_num_decode` | Predicted decode replicas |
-| `rbg_planner_p_correction_factor` | TTFT correction factor |
-| `rbg_planner_d_correction_factor` | ITL correction factor |
-| `rbg_planner_gpu_hours_total` | Cumulative GPU hours used |
+| `rbg_planner_observed_request_duration_seconds` | Observed average request duration (s) |
+| `rbg_planner_observed_isl` | Observed average input sequence length (tokens) |
+| `rbg_planner_observed_osl` | Observed average output sequence length (tokens) |
+
+### Predicted Metrics
+
+Load predictions and scaling decisions computed by the planner:
+
+| Metric | Description |
+|--------|-------------|
+| `rbg_planner_predicted_request_rate` | Predicted request rate for next interval (req/s) |
+| `rbg_planner_predicted_isl` | Predicted input sequence length (tokens) |
+| `rbg_planner_predicted_osl` | Predicted output sequence length (tokens) |
+| `rbg_planner_predicted_num_prefill` | Predicted number of prefill replicas needed |
+| `rbg_planner_predicted_num_decode` | Predicted number of decode replicas needed |
+
+### Correction Factors
+
+Correction factors that calibrate profiling-based predictions against real-world performance:
+
+| Metric | Description |
+|--------|-------------|
+| `rbg_planner_p_correction_factor` | Prefill correction factor (observed TTFT / expected TTFT) |
+| `rbg_planner_d_correction_factor` | Decode correction factor (observed ITL / expected ITL) |
+
+## Grafana Dashboard
+
+A pre-built Grafana dashboard is provided at `deploy/grafana-planner-dashboard.yaml`. It visualizes all planner metrics in four sections:
+
+1. **Worker Counts & GPU Usage** — Current prefill/decode worker counts (stat panels), cumulative GPU hours, and worker count history over time
+2. **Observed Metrics** — TTFT & ITL latency (dual-axis), request rate & duration (dual-axis), ISL & OSL sequence lengths
+3. **Predicted Metrics** — Predicted request rate, predicted ISL/OSL, and predicted replica counts (dashed lines to distinguish from observed)
+4. **Correction Factors** — Prefill/decode correction factor gauges with threshold coloring (green < 1.2, orange < 1.5, red >= 1.5), and correction factor history over time
+
+### Deploying the Dashboard
+
+```bash
+# Deploy the dashboard ConfigMap (Grafana auto-discovers it via the grafana_dashboard label)
+kubectl apply -f deploy/grafana-planner-dashboard.yaml
+
+# If using a different monitoring namespace, update the metadata.namespace field first
+```
+
+The dashboard includes a **Namespace** variable dropdown to filter metrics when running multiple planners across namespaces.
+
+### Prometheus Scraping
+
+To have Prometheus scrape the planner's metrics endpoint, add a scrape config or PodMonitor targeting the planner pod on the configured `PLANNER_PROMETHEUS_PORT` (default: `9091`):
+
+```yaml
+scrape_configs:
+  - job_name: 'rbg-planner'
+    static_configs:
+      - targets: ['<planner-pod>:9091']
+```
 
 ## Development
 

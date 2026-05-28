@@ -40,19 +40,13 @@ class TestLabelFilter:
         client = PrometheusMetricsClient(url="http://prom:9090")
         assert client._build_label_filter() == ""
 
-    def test_namespace_filter(self, mock_prom):
-        client = PrometheusMetricsClient(url="http://prom:9090", namespace="prod")
-        assert client._build_label_filter() == '{namespace="prod"}'
-
     def test_model_filter(self, mock_prom):
         client = PrometheusMetricsClient(url="http://prom:9090")
-        assert client._build_label_filter(model_name="Qwen/Qwen3-0.6B") == '{model="qwen/qwen3-0.6b"}'
+        assert client._build_label_filter(model_name="Qwen/Qwen3-0.6B") == '{model_name="Qwen/Qwen3-0.6B"}'
 
-    def test_both_filters(self, mock_prom):
-        client = PrometheusMetricsClient(url="http://prom:9090", namespace="ns1")
-        result = client._build_label_filter(model_name="MyModel")
-        assert 'namespace="ns1"' in result
-        assert 'model="mymodel"' in result
+    def test_model_filter_preserves_case(self, mock_prom):
+        client = PrometheusMetricsClient(url="http://prom:9090")
+        assert client._build_label_filter(model_name="MyModel") == '{model_name="MyModel"}'
 
 
 class TestQueryMetrics:

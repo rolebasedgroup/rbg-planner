@@ -17,12 +17,12 @@ logger = logging.getLogger(__name__)
 # Metric name mappings per source
 METRIC_NAMES = {
     "sglang": {
-        "ttft": "sglang:time_to_first_token_seconds",
-        "itl": "sglang:inter_token_latency_seconds",
-        "request_duration": "sglang:e2e_request_latency_seconds",
-        "requests_total": "sglang:num_requests_total",
-        "prompt_tokens": "sglang:num_prompt_tokens_total",
-        "generation_tokens": "sglang:num_generation_tokens_total",
+        "ttft": "sglang_time_to_first_token_seconds",
+        "itl": "sglang_inter_token_latency_seconds",
+        "request_duration": "sglang_e2e_request_latency_seconds",
+        "requests_total": "sglang_num_requests_total",
+        "prompt_tokens": "sglang_prompt_tokens_total",
+        "generation_tokens": "sglang_generation_tokens_total",
     },
     "vllm": {
         "ttft": "vllm:time_to_first_token_seconds",
@@ -50,10 +50,8 @@ class PrometheusMetricsClient:
         self,
         url: str,
         metric_source: str = "sglang",
-        namespace: Optional[str] = None,
     ):
         self.prom = PrometheusConnect(url=url, disable_ssl=True)
-        self.namespace = namespace
 
         if metric_source not in METRIC_NAMES:
             raise ValueError(
@@ -66,10 +64,8 @@ class PrometheusMetricsClient:
     def _build_label_filter(self, model_name: Optional[str] = None) -> str:
         """Build PromQL label filter string."""
         filters = []
-        if self.namespace:
-            filters.append(f'namespace="{self.namespace}"')
         if model_name:
-            filters.append(f'model="{model_name.lower()}"')
+            filters.append(f'model_name="{model_name}"')
         if filters:
             return "{" + ",".join(filters) + "}"
         return ""
