@@ -1,12 +1,19 @@
-FROM python:3.11-slim
+FROM golang:1.24 AS builder
 
-WORKDIR /app
+WORKDIR /workspace
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+COPY go.mod go.sum ./
+RUN go mod download
 
-COPY rbg_planner/ rbg_planner/
-COPY pyproject.toml .
-RUN pip install --no-cache-dir -e .
+COPY api/ api/
+COPY cmd/ cmd/
+COPY internal/ internal/
 
-ENTRYPOINT ["rbg-planner"]
+RUN CGO_ENABLED=0 GOOS=linux go build -o manager cmd/main.go
+
+FROM gcr.io/distroless/static:nonroot
+WORKDIR /
+COPY --from=builder /workspace/manager .
+USER 65532:65532
+
+ENTRYPOINT ["/manager"]

@@ -1,0 +1,86 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: rbg-planner-operator
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - serviceaccounts
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - deployments
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - clusterrolebindings
+  - clusterroles
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - rolebasedgroup.inference-extension.io
+  resources:
+  - roleautoscalers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - rolebasedgroup.inference-extension.io
+  resources:
+  - roleautoscalers/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - rolebasedgroup.inference-extension.io
+  resources:
+  - roleautoscalers/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
+  - workloads.x-k8s.io
+  resources:
+  - rolebasedgroups
+  verbs:
+  - get
+  - list
+  - watch
