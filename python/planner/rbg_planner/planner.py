@@ -48,58 +48,86 @@ class Metrics:
 
 
 class PlannerPrometheusMetrics:
-    """Planner's own exported Prometheus metrics for observability."""
+    """Planner's own exported Prometheus metrics for observability.
 
-    def __init__(self, prefix: str = "rbg_planner"):
+    All metrics are labeled with `namespace` and `rbg_name` to support
+    multi-planner deployments and Grafana dashboard filtering.
+    """
+
+    LABEL_NAMES = ["namespace", "rbg_name"]
+
+    def __init__(self, namespace: str, rbg_name: str, prefix: str = "rbg_planner"):
+        self._labels = {"namespace": namespace, "rbg_name": rbg_name}
+
         self.num_p_workers = Gauge(
-            f"{prefix}_num_prefill_workers", "Number of prefill workers"
+            f"{prefix}_num_prefill_workers", "Number of prefill workers",
+            self.LABEL_NAMES,
         )
         self.num_d_workers = Gauge(
-            f"{prefix}_num_decode_workers", "Number of decode workers"
+            f"{prefix}_num_decode_workers", "Number of decode workers",
+            self.LABEL_NAMES,
         )
         self.observed_ttft = Gauge(
-            f"{prefix}_observed_ttft_ms", "Observed time to first token (ms)"
+            f"{prefix}_observed_ttft_ms", "Observed time to first token (ms)",
+            self.LABEL_NAMES,
         )
         self.observed_itl = Gauge(
-            f"{prefix}_observed_itl_ms", "Observed inter-token latency (ms)"
+            f"{prefix}_observed_itl_ms", "Observed inter-token latency (ms)",
+            self.LABEL_NAMES,
         )
         self.observed_request_rate = Gauge(
-            f"{prefix}_observed_request_rate", "Observed request rate (req/s)"
+            f"{prefix}_observed_request_rate", "Observed request rate (req/s)",
+            self.LABEL_NAMES,
         )
         self.observed_isl = Gauge(
-            f"{prefix}_observed_isl", "Observed input sequence length"
+            f"{prefix}_observed_isl", "Observed input sequence length",
+            self.LABEL_NAMES,
         )
         self.observed_osl = Gauge(
-            f"{prefix}_observed_osl", "Observed output sequence length"
+            f"{prefix}_observed_osl", "Observed output sequence length",
+            self.LABEL_NAMES,
         )
         self.observed_request_duration = Gauge(
             f"{prefix}_observed_request_duration_seconds",
             "Observed request duration (s)",
+            self.LABEL_NAMES,
         )
         self.p_correction_factor = Gauge(
-            f"{prefix}_p_correction_factor", "Prefill correction factor"
+            f"{prefix}_p_correction_factor", "Prefill correction factor",
+            self.LABEL_NAMES,
         )
         self.d_correction_factor = Gauge(
-            f"{prefix}_d_correction_factor", "Decode correction factor"
+            f"{prefix}_d_correction_factor", "Decode correction factor",
+            self.LABEL_NAMES,
         )
         self.predicted_request_rate = Gauge(
-            f"{prefix}_predicted_request_rate", "Predicted request rate (req/s)"
+            f"{prefix}_predicted_request_rate", "Predicted request rate (req/s)",
+            self.LABEL_NAMES,
         )
         self.predicted_isl = Gauge(
-            f"{prefix}_predicted_isl", "Predicted input sequence length"
+            f"{prefix}_predicted_isl", "Predicted input sequence length",
+            self.LABEL_NAMES,
         )
         self.predicted_osl = Gauge(
-            f"{prefix}_predicted_osl", "Predicted output sequence length"
+            f"{prefix}_predicted_osl", "Predicted output sequence length",
+            self.LABEL_NAMES,
         )
         self.predicted_num_p = Gauge(
-            f"{prefix}_predicted_num_prefill", "Predicted number of prefill replicas"
+            f"{prefix}_predicted_num_prefill", "Predicted number of prefill replicas",
+            self.LABEL_NAMES,
         )
         self.predicted_num_d = Gauge(
-            f"{prefix}_predicted_num_decode", "Predicted number of decode replicas"
+            f"{prefix}_predicted_num_decode", "Predicted number of decode replicas",
+            self.LABEL_NAMES,
         )
         self.gpu_hours = Gauge(
-            f"{prefix}_gpu_hours_total", "Cumulative GPU hours used"
+            f"{prefix}_gpu_hours_total", "Cumulative GPU hours used",
+            self.LABEL_NAMES,
         )
+
+    def set(self, gauge: Gauge, value):
+        """Set a gauge value with the configured labels."""
+        gauge.labels(**self._labels).set(value)
 
 
 class Planner:
@@ -158,7 +186,10 @@ class Planner:
         if config.planner_prometheus_port > 0:
             try:
                 start_http_server(config.planner_prometheus_port)
-                self.prom_metrics = PlannerPrometheusMetrics()
+                self.prom_metrics = PlannerPrometheusMetrics(
+                    namespace=config.rbg_namespace,
+                    rbg_name=config.rbg_name,
+                )
                 logger.info(
                     f"Started planner metrics server on port {config.planner_prometheus_port}"
                 )
@@ -213,18 +244,17 @@ class Planner:
 
         # Export metrics
         if self.prom_metrics:
-            self.prom_metrics.num_p_workers.set(num_p)
-            self.prom_metrics.num_d_workers.set(num_d)
-            self.prom_metrics.observed_ttft.set(self.last_metrics.ttft)
-            self.prom_metrics.observed_itl.set(self.last_metrics.itl)
-            self.prom_metrics.observed_request_rate.set(
-                self.last_metrics.num_req / self.config.adjustment_interval
-            )
-            self.prom_metrics.observed_isl.set(self.last_metrics.isl)
-            self.prom_metrics.observed_osl.set(self.last_metrics.osl)
-            self.prom_metrics.observed_request_duration.set(
-                self.last_metrics.request_duration or 0
-            )
+            m = self.prom_metrics
+            m.set(m.num_p_workers, num_p)
+            m.set(m.num_d_workers, num_d)
+            m.set(m.observed_ttft, self.last_metrics.ttft)
+            m.set(m.observed_itl, self.last_metrics.itl)
+            m.set(m.observed_request_rate,
+                  self.last_metrics.num_req / self.config.adjustment_interval)
+            m.set(m.observed_isl, self.last_metrics.isl)
+            m.set(m.observed_osl, self.last_metrics.osl)
+            m.set(m.observed_request_duration,
+                  self.last_metrics.request_duration or 0)
 
             # Track GPU hours
             interval_gpu_hours = (
@@ -236,7 +266,7 @@ class Planner:
                 / 3600
             )
             self.cumulative_gpu_hours += interval_gpu_hours
-            self.prom_metrics.gpu_hours.set(self.cumulative_gpu_hours)
+            m.set(m.gpu_hours, self.cumulative_gpu_hours)
 
     def predict_load(self) -> tuple[Optional[float], Optional[float], Optional[float]]:
         """Predict the next interval's load using configured predictor."""
@@ -365,8 +395,9 @@ class Planner:
         )
 
         if self.prom_metrics:
-            self.prom_metrics.p_correction_factor.set(self.p_correction_factor)
-            self.prom_metrics.d_correction_factor.set(self.d_correction_factor)
+            m = self.prom_metrics
+            m.set(m.p_correction_factor, self.p_correction_factor)
+            m.set(m.d_correction_factor, self.d_correction_factor)
 
     async def make_adjustments(self):
         """Compute and apply scaling decisions based on observed and predicted metrics."""
@@ -391,11 +422,11 @@ class Planner:
 
         # Export predicted metrics
         if self.prom_metrics:
-            self.prom_metrics.predicted_request_rate.set(
-                next_num_req / self.config.adjustment_interval
-            )
-            self.prom_metrics.predicted_isl.set(next_isl)
-            self.prom_metrics.predicted_osl.set(next_osl)
+            m = self.prom_metrics
+            m.set(m.predicted_request_rate,
+                  next_num_req / self.config.adjustment_interval)
+            m.set(m.predicted_isl, next_isl)
+            m.set(m.predicted_osl, next_osl)
 
         # Compute required replicas
         try:
@@ -407,8 +438,9 @@ class Planner:
             return
 
         if self.prom_metrics:
-            self.prom_metrics.predicted_num_p.set(next_num_p)
-            self.prom_metrics.predicted_num_d.set(next_num_d)
+            m = self.prom_metrics
+            m.set(m.predicted_num_p, next_num_p)
+            m.set(m.predicted_num_d, next_num_d)
 
         # Apply scaling
         if not self.config.no_operation:

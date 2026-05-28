@@ -23,6 +23,10 @@ env/
 .coverage
 htmlcov/
 
+# Go
+bin/
+vendor/
+
 # OS
 .DS_Store
 Thumbs.db

@@ -66,7 +66,7 @@ data:
           "targets": [
             {
               "editorMode": "code",
-              "expr": "rbg_planner_num_prefill_workers{namespace=~\"$namespace\"}",
+              "expr": "rbg_planner_num_prefill_workers{namespace=~\"$namespace\", rbg_name=~\"$rbg_name\"}",
               "legendFormat": "Prefill Workers",
               "range": true,
               "refId": "A"
@@ -102,7 +102,7 @@ data:
           "targets": [
             {
               "editorMode": "code",
-              "expr": "rbg_planner_num_decode_workers{namespace=~\"$namespace\"}",
+              "expr": "rbg_planner_num_decode_workers{namespace=~\"$namespace\", rbg_name=~\"$rbg_name\"}",
               "legendFormat": "Decode Workers",
               "range": true,
               "refId": "A"
@@ -139,7 +139,7 @@ data:
           "targets": [
             {
               "editorMode": "code",
-              "expr": "rbg_planner_gpu_hours_total{namespace=~\"$namespace\"}",
+              "expr": "rbg_planner_gpu_hours_total{namespace=~\"$namespace\", rbg_name=~\"$rbg_name\"}",
               "legendFormat": "GPU Hours",
               "range": true,
               "refId": "A"
@@ -197,14 +197,14 @@ data:
           "targets": [
             {
               "editorMode": "code",
-              "expr": "rbg_planner_num_prefill_workers{namespace=~\"$namespace\"}",
+              "expr": "rbg_planner_num_prefill_workers{namespace=~\"$namespace\", rbg_name=~\"$rbg_name\"}",
               "legendFormat": "Prefill Workers",
               "range": true,
               "refId": "A"
             },
             {
               "editorMode": "code",
-              "expr": "rbg_planner_num_decode_workers{namespace=~\"$namespace\"}",
+              "expr": "rbg_planner_num_decode_workers{namespace=~\"$namespace\", rbg_name=~\"$rbg_name\"}",
               "legendFormat": "Decode Workers",
               "range": true,
               "refId": "B"
@@ -276,14 +276,14 @@ data:
           "targets": [
             {
               "editorMode": "code",
-              "expr": "rbg_planner_observed_ttft_ms{namespace=~\"$namespace\"}",
+              "expr": "rbg_planner_observed_ttft_ms{namespace=~\"$namespace\", rbg_name=~\"$rbg_name\"}",
               "legendFormat": "TTFT",
               "range": true,
               "refId": "A"
             },
             {
               "editorMode": "code",
-              "expr": "rbg_planner_observed_itl_ms{namespace=~\"$namespace\"}",
+              "expr": "rbg_planner_observed_itl_ms{namespace=~\"$namespace\", rbg_name=~\"$rbg_name\"}",
               "legendFormat": "ITL",
               "range": true,
               "refId": "B"
@@ -346,14 +346,14 @@ data:
           "targets": [
             {
               "editorMode": "code",
-              "expr": "rbg_planner_observed_request_rate{namespace=~\"$namespace\"}",
+              "expr": "rbg_planner_observed_request_rate{namespace=~\"$namespace\", rbg_name=~\"$rbg_name\"}",
               "legendFormat": "Request Rate",
               "range": true,
               "refId": "A"
             },
             {
               "editorMode": "code",
-              "expr": "rbg_planner_observed_request_duration_seconds{namespace=~\"$namespace\"}",
+              "expr": "rbg_planner_observed_request_duration_seconds{namespace=~\"$namespace\", rbg_name=~\"$rbg_name\"}",
               "legendFormat": "Request Duration",
               "range": true,
               "refId": "B"
@@ -409,14 +409,14 @@ data:
           "targets": [
             {
               "editorMode": "code",
-              "expr": "rbg_planner_observed_isl{namespace=~\"$namespace\"}",
+              "expr": "rbg_planner_observed_isl{namespace=~\"$namespace\", rbg_name=~\"$rbg_name\"}",
               "legendFormat": "ISL",
               "range": true,
               "refId": "A"
             },
             {
               "editorMode": "code",
-              "expr": "rbg_planner_observed_osl{namespace=~\"$namespace\"}",
+              "expr": "rbg_planner_observed_osl{namespace=~\"$namespace\", rbg_name=~\"$rbg_name\"}",
               "legendFormat": "OSL",
               "range": true,
               "refId": "B"
@@ -477,7 +477,7 @@ data:
           "targets": [
             {
               "editorMode": "code",
-              "expr": "rbg_planner_predicted_request_rate{namespace=~\"$namespace\"}",
+              "expr": "rbg_planner_predicted_request_rate{namespace=~\"$namespace\", rbg_name=~\"$rbg_name\"}",
               "legendFormat": "Predicted Request Rate",
               "range": true,
               "refId": "A"
@@ -534,14 +534,14 @@ data:
           "targets": [
             {
               "editorMode": "code",
-              "expr": "rbg_planner_predicted_isl{namespace=~\"$namespace\"}",
+              "expr": "rbg_planner_predicted_isl{namespace=~\"$namespace\", rbg_name=~\"$rbg_name\"}",
               "legendFormat": "Predicted ISL",
               "range": true,
               "refId": "A"
             },
             {
               "editorMode": "code",
-              "expr": "rbg_planner_predicted_osl{namespace=~\"$namespace\"}",
+              "expr": "rbg_planner_predicted_osl{namespace=~\"$namespace\", rbg_name=~\"$rbg_name\"}",
               "legendFormat": "Predicted OSL",
               "range": true,
               "refId": "B"
@@ -599,14 +599,14 @@ data:
           "targets": [
             {
               "editorMode": "code",
-              "expr": "rbg_planner_predicted_num_prefill{namespace=~\"$namespace\"}",
+              "expr": "rbg_planner_predicted_num_prefill{namespace=~\"$namespace\", rbg_name=~\"$rbg_name\"}",
               "legendFormat": "Predicted Prefill",
               "range": true,
               "refId": "A"
             },
             {
               "editorMode": "code",
-              "expr": "rbg_planner_predicted_num_decode{namespace=~\"$namespace\"}",
+              "expr": "rbg_planner_predicted_num_decode{namespace=~\"$namespace\", rbg_name=~\"$rbg_name\"}",
               "legendFormat": "Predicted Decode",
               "range": true,
               "refId": "B"
@@ -659,7 +659,7 @@ data:
           "targets": [
             {
               "editorMode": "code",
-              "expr": "rbg_planner_p_correction_factor{namespace=~\"$namespace\"}",
+              "expr": "rbg_planner_p_correction_factor{namespace=~\"$namespace\", rbg_name=~\"$rbg_name\"}",
               "legendFormat": "Prefill CF",
               "range": true,
               "refId": "A"
@@ -704,7 +704,7 @@ data:
           "targets": [
             {
               "editorMode": "code",
-              "expr": "rbg_planner_d_correction_factor{namespace=~\"$namespace\"}",
+              "expr": "rbg_planner_d_correction_factor{namespace=~\"$namespace\", rbg_name=~\"$rbg_name\"}",
               "legendFormat": "Decode CF",
               "range": true,
               "refId": "A"
@@ -767,14 +767,14 @@ data:
           "targets": [
             {
               "editorMode": "code",
-              "expr": "rbg_planner_p_correction_factor{namespace=~\"$namespace\"}",
+              "expr": "rbg_planner_p_correction_factor{namespace=~\"$namespace\", rbg_name=~\"$rbg_name\"}",
               "legendFormat": "Prefill CF",
               "range": true,
               "refId": "A"
             },
             {
               "editorMode": "code",
-              "expr": "rbg_planner_d_correction_factor{namespace=~\"$namespace\"}",
+              "expr": "rbg_planner_d_correction_factor{namespace=~\"$namespace\", rbg_name=~\"$rbg_name\"}",
               "legendFormat": "Decode CF",
               "range": true,
               "refId": "B"
@@ -810,6 +810,23 @@ data:
             "name": "namespace",
             "options": [],
             "query": "label_values(rbg_planner_num_prefill_workers, namespace)",
+            "refresh": 2,
+            "regex": "",
+            "skipUrlSync": false,
+            "sort": 1,
+            "type": "query"
+          },
+          {
+            "current": { "selected": true, "text": ["All"], "value": ["$__all"] },
+            "datasource": { "type": "prometheus", "uid": "${datasource}" },
+            "definition": "label_values(rbg_planner_num_prefill_workers{namespace=~\"$namespace\"}, rbg_name)",
+            "hide": 0,
+            "includeAll": true,
+            "label": "RBG Name",
+            "multi": true,
+            "name": "rbg_name",
+            "options": [],
+            "query": "label_values(rbg_planner_num_prefill_workers{namespace=~\"$namespace\"}, rbg_name)",
             "refresh": 2,
             "regex": "",
             "skipUrlSync": false,

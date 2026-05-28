@@ -1,0 +1,51 @@
+apiVersion: rolebasedgroup.inference-extension.io/v1alpha1
+kind: RoleAutoScaler
+metadata:
+  name: sglang-pd-scaler
+  namespace: inference
+spec:
+  # Unified: Unified scaling (reserved, not yet implemented)
+  adjustmentInterval: 180    # seconds between scaling decisions
+  # Scaling pattern
+  pattern:
+    # PDDisaggregated: Prefill/Decode disaggregated scaling (supported)
+    PDDisaggregated:
+      prefill:
+        roleName: prefill
+        maxReplicas: 10
+        minReplicas: 1
+      decode:
+        roleName: decode
+        maxReplicas: 10
+        minReplicas: 1
+
+  # Scaling engine type
+  scalerEngine:
+    # DynamoPlanner: SLA-based planner derived from NVIDIA Dynamo
+    DynamoPlanner:
+      modelName: "Qwen/Qwen3-0.6B"
+      # SLA targets
+      ttft: 200.0             # target TTFT in milliseconds
+      itl: 20.0               # target ITL in milliseconds
+
+      image: "ghcr.io/rolebasedgroup/role-auto-scaler-dynamo-engine:latest"
+
+      # Load prediction
+      loadPredictor: arima       # arima | constant | prophet
+      predictionWindow: 50       # data points in predictor window
+
+      # Correction factors
+      noCorrection: false        # disable SLA correction factors
+
+      # Dry-run mode
+      dryRun: false         # observe only, no actual scaling
+
+      profiling:
+        image: "ghcr.io/rolebasedgroup/inference-ext-cli:latest"
+
+      # Metrics configuration
+      metricsEndpoint:
+        # Metric source: sglang | vllm | patio
+        metricSource: sglang
+        # Port for planner's own Prometheus metrics exposition
+        port: 9091
