@@ -2,7 +2,7 @@
 
 Kubernetes CRD Operator for SLA-based autoscaling of [RoleBasedGroup](https://github.com/rolebasedgroup) Prefill/Decode disaggregated inference workloads.
 
-Users create a `RoleAutoScaler` custom resource for an RBG, and the operator automatically manages profiling, deploys the planner engine, and scales prefill/decode roles to meet TTFT and ITL SLA targets.
+Users create an `AutoScaler` custom resource for an RBG, and the operator automatically manages profiling, deploys the planner engine, and scales prefill/decode roles to meet TTFT and ITL SLA targets.
 
 ## Acknowledgements
 
@@ -20,7 +20,7 @@ The core planning algorithm, SLA profiling methodology, and performance interpol
 │ Kubernetes Cluster                 │                                          │
 │                                    │                                          │
 │  ┌──────────────────┐    ┌─────────▼──────────┐    ┌────────────────────┐    │
-│  │  RoleAutoScaler  │    │  Planner Engine    │    │   RBG Controller   │    │
+│  │  AutoScaler  │    │  Planner Engine    │    │   RBG Controller   │    │
 │  │  Operator (Go)   │───►│  (Python, managed  │───►│                    │    │
 │  │                  │    │   as Deployment)   │    │  scales pods via   │    │
 │  │  1. Validate RBG │    │                    │    │  StatefulSets/     │    │
@@ -39,7 +39,7 @@ The core planning algorithm, SLA profiling methodology, and performance interpol
 │                                                                              │
 │  ┌────────┐  ┌────────┐                                                      │
 │  │Prefill │  │ Decode │     Target RoleBasedGroup                            │
-│  │ Role   │  │  Role  │     (same name as RoleAutoScaler)                    │
+│  │ Role   │  │  Role  │     (same name as AutoScaler)                    │
 │  │(N GPU) │  │(M GPU) │                                                      │
 │  └────────┘  └────────┘                                                      │
 │                                                                              │
@@ -50,13 +50,13 @@ The core planning algorithm, SLA profiling methodology, and performance interpol
 
 | Component | Image | Description |
 |-----------|-------|-------------|
-| **RoleAutoScaler Operator** | `rbg-planner-operator` | Go CRD controller. Watches `RoleAutoScaler` CRs, manages the lifecycle: validates the target RBG, creates RBAC, runs profiling Jobs, deploys the planner engine, and updates status. |
+| **AutoScaler Operator** | `rbg-planner-operator` | Go CRD controller. Watches `AutoScaler` CRs, manages the lifecycle: validates the target RBG, creates RBAC, runs profiling Jobs, deploys the planner engine, and updates status. |
 | **Planner Engine** | `rbg-planner` | Python SLA-based autoscaler (Dynamo planner algorithm). Observes metrics from Prometheus, predicts load, computes replica requirements from profiling data, and applies scaling decisions via RBGSA. |
 | **Profiler** | `rbg-profiler` | Python profiling tool. Runs benchmarks against inference engines and generates profiling data (prefill/decode throughput curves) stored in a ConfigMap. |
 
 ### How It Works
 
-1. User creates a `RoleAutoScaler` CR with the same name as the target RBG
+1. User creates an `AutoScaler` CR with the same name as the target RBG
 2. Operator validates the RBG exists and reads GPU-per-engine from the RBG's resource requests
 3. Operator creates a ServiceAccount, ClusterRole, and ClusterRoleBinding for the planner
 4. Operator runs a profiling Job to generate performance data (or uses existing ConfigMap)
@@ -67,7 +67,7 @@ The core planning algorithm, SLA profiling methodology, and performance interpol
 ### State Machine
 
 ```
-RoleAutoScaler Created
+AutoScaler Created
         │
         ▼
     [Pending]  ──── validate RBG exists, create RBAC
@@ -90,7 +90,7 @@ RoleAutoScaler Created
 ### Step 1: Install the CRD
 
 ```bash
-kubectl apply -f config/crd/rolebasedgroup.inference-extension.io_roleautoscalers.yaml
+kubectl apply -f config/crd/inference-extension.rolebasedgroup.io_autoscalers.yaml
 ```
 
 ### Step 2: Deploy the Operator
@@ -103,20 +103,20 @@ docker push <your-registry>/rbg-planner-operator:latest
 # Deploy the operator (apply your own manager Deployment manifest)
 ```
 
-### Step 3: Create a RoleAutoScaler
+### Step 3: Create an AutoScaler
 
-Ensure you have a RoleBasedGroup already deployed (e.g., `sglang-pd-inference`), then create a `RoleAutoScaler` with the **same name**:
+Ensure you have a RoleBasedGroup already deployed (e.g., `sglang-pd-inference`), then create an `AutoScaler` with the **same name**:
 
 ```yaml
-apiVersion: rolebasedgroup.inference-extension.io/v1alpha1
-kind: RoleAutoScaler
+apiVersion: inference-extension.rolebasedgroup.io/v1alpha1
+kind: AutoScaler
 metadata:
   name: sglang-pd-inference    # must match the RBG name
   namespace: inference
 spec:
-  adjustmentInterval: 180
+  scalingInterval: 180
 
-  patternOptions:
+  pattern:
     PDDisaggregated:
       prefill:
         roleName: prefill
@@ -127,9 +127,8 @@ spec:
         maxReplicas: 10
         minReplicas: 1
 
-  scalerEngine:
+  implementation:
     DynamoPlanner:
-      image: "ghcr.io/rolebasedgroup/rbg-planner:latest"
       modelName: "Qwen/Qwen3-0.6B"
       ttft: 200.0
       itl: 20.0
@@ -153,8 +152,8 @@ kubectl apply -f config/samples/roleautoscaler_full.yaml
 ### Step 4: Observe
 
 ```bash
-# Watch the RoleAutoScaler status
-kubectl get ras -w
+# Watch the AutoScaler status
+kubectl get as -w
 
 # Expected output:
 # NAME                  PHASE   PREFILL   DECODE   AGE
@@ -179,30 +178,29 @@ INFO  Scaling role decode: 1 -> 4
 
 ## CRD Reference
 
-### RoleAutoScaler Spec
+### AutoScaler Spec
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `spec.adjustmentInterval` | int | `180` | Seconds between scaling decisions |
-| `spec.patternOptions.PDDisaggregated.prefill.roleName` | string | `prefill` | Prefill role name in the RBG |
-| `spec.patternOptions.PDDisaggregated.prefill.minReplicas` | int | `1` | Minimum prefill replicas |
-| `spec.patternOptions.PDDisaggregated.prefill.maxReplicas` | int | (required) | Maximum prefill replicas |
-| `spec.patternOptions.PDDisaggregated.decode.roleName` | string | `decode` | Decode role name in the RBG |
-| `spec.patternOptions.PDDisaggregated.decode.minReplicas` | int | `1` | Minimum decode replicas |
-| `spec.patternOptions.PDDisaggregated.decode.maxReplicas` | int | (required) | Maximum decode replicas |
-| `spec.scalerEngine.DynamoPlanner.image` | string | (required) | Planner engine container image |
-| `spec.scalerEngine.DynamoPlanner.modelName` | string | (required) | Model name for Prometheus label filtering |
-| `spec.scalerEngine.DynamoPlanner.ttft` | float | `500.0` | Target TTFT SLA (ms) |
-| `spec.scalerEngine.DynamoPlanner.itl` | float | `50.0` | Target ITL SLA (ms) |
-| `spec.scalerEngine.DynamoPlanner.loadPredictor` | string | `arima` | Load predictor: `arima`, `constant`, `prophet` |
-| `spec.scalerEngine.DynamoPlanner.predictionWindow` | int | `50` | Data points in predictor window |
-| `spec.scalerEngine.DynamoPlanner.noCorrection` | bool | `false` | Disable SLA correction factors |
-| `spec.scalerEngine.DynamoPlanner.dryRun` | bool | `false` | Observe only, no actual scaling |
-| `spec.scalerEngine.DynamoPlanner.profiling.image` | string | (hardcoded default) | Profiling tool container image |
-| `spec.scalerEngine.DynamoPlanner.metricsEndpoint.metricSource` | string | `sglang` | Metric source: `sglang`, `vllm`, `patio` |
-| `spec.scalerEngine.DynamoPlanner.metricsEndpoint.port` | int | `9091` | Planner Prometheus metrics port |
+| `spec.scalingInterval` | int | `180` | Seconds between scaling decisions |
+| `spec.pattern.PDDisaggregated.prefill.roleName` | string | `prefill` | Prefill role name in the RBG |
+| `spec.pattern.PDDisaggregated.prefill.minReplicas` | int | `1` | Minimum prefill replicas |
+| `spec.pattern.PDDisaggregated.prefill.maxReplicas` | int | (required) | Maximum prefill replicas |
+| `spec.pattern.PDDisaggregated.decode.roleName` | string | `decode` | Decode role name in the RBG |
+| `spec.pattern.PDDisaggregated.decode.minReplicas` | int | `1` | Minimum decode replicas |
+| `spec.pattern.PDDisaggregated.decode.maxReplicas` | int | (required) | Maximum decode replicas |
+| `spec.implementation.DynamoPlanner.modelName` | string | (required) | Model name for Prometheus label filtering |
+| `spec.implementation.DynamoPlanner.ttft` | float | `500.0` | Target TTFT SLA (ms) |
+| `spec.implementation.DynamoPlanner.itl` | float | `50.0` | Target ITL SLA (ms) |
+| `spec.implementation.DynamoPlanner.loadPredictor` | string | `arima` | Load predictor: `arima`, `constant`, `prophet` |
+| `spec.implementation.DynamoPlanner.predictionWindow` | int | `50` | Data points in predictor window |
+| `spec.implementation.DynamoPlanner.noCorrection` | bool | `false` | Disable SLA correction factors |
+| `spec.implementation.DynamoPlanner.dryRun` | bool | `false` | Observe only, no actual scaling |
+| `spec.implementation.DynamoPlanner.profiling.image` | string | (hardcoded default) | Profiling tool container image |
+| `spec.implementation.DynamoPlanner.metricsEndpoint.metricSource` | string | `sglang` | Metric source: `sglang`, `vllm`, `patio` |
+| `spec.implementation.DynamoPlanner.metricsEndpoint.port` | int | `9091` | Planner Prometheus metrics port |
 
-### RoleAutoScaler Status
+### AutoScaler Status
 
 | Field | Description |
 |-------|-------------|
@@ -282,13 +280,13 @@ kubectl apply -f deploy/grafana-planner-dashboard.yaml
 
 ```
 rbg-planner/
-├── api/v1alpha1/                  # CRD type definitions (RoleAutoScaler)
+├── api/v1alpha1/                  # CRD type definitions (AutoScaler CRD)
 ├── cmd/main.go                    # Operator entrypoint
 ├── internal/controller/           # Reconciler implementation
 ├── config/
 │   ├── crd/                       # Generated CRD manifests
 │   ├── rbac/                      # Generated RBAC manifests
-│   └── samples/                   # Example RoleAutoScaler CRs
+│   └── samples/                   # Example AutoScaler CR
 ├── python/
 │   ├── planner/                   # Planner engine (Python)
 │   │   ├── rbg_planner/           # Core planner package

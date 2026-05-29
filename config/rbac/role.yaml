@@ -39,6 +39,32 @@ rules:
   - list
   - watch
 - apiGroups:
+  - inference-extension.rolebasedgroup.io
+  resources:
+  - autoscalers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - inference-extension.rolebasedgroup.io
+  resources:
+  - autoscalers/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - inference-extension.rolebasedgroup.io
+  resources:
+  - autoscalers/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
   - rbac.authorization.k8s.io
   resources:
   - clusterrolebindings
@@ -50,32 +76,6 @@ rules:
   - list
   - update
   - watch
-- apiGroups:
-  - rolebasedgroup.inference-extension.io
-  resources:
-  - roleautoscalers
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - rolebasedgroup.inference-extension.io
-  resources:
-  - roleautoscalers/finalizers
-  verbs:
-  - update
-- apiGroups:
-  - rolebasedgroup.inference-extension.io
-  resources:
-  - roleautoscalers/status
-  verbs:
-  - get
-  - patch
-  - update
 - apiGroups:
   - workloads.x-k8s.io
   resources:
