@@ -4,16 +4,16 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
-  name: roleautoscalers.rolebasedgroup.inference-extension.io
+  name: autoscalers.inference-extension.rolebasedgroup.io
 spec:
-  group: rolebasedgroup.inference-extension.io
+  group: inference-extension.rolebasedgroup.io
   names:
-    kind: RoleAutoScaler
-    listKind: RoleAutoScalerList
-    plural: roleautoscalers
+    kind: AutoScaler
+    listKind: AutoScalerList
+    plural: autoscalers
     shortNames:
-    - ras
-    singular: roleautoscaler
+    - as
+    singular: autoscaler
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -36,9 +36,9 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          RoleAutoScaler is the Schema for the roleautoscalers API.
-          A RoleAutoScaler automatically scales roles within a RoleBasedGroup
-          to meet SLA targets. The RoleAutoScaler name must match the target
+          AutoScaler is the Schema for the autoscalers API.
+          An AutoScaler automatically scales roles within a RoleBasedGroup
+          to meet SLA targets. The AutoScaler name must match the target
           RoleBasedGroup name in the same namespace.
         properties:
           apiVersion:
@@ -59,16 +59,83 @@ spec:
           metadata:
             type: object
           spec:
-            description: RoleAutoScalerSpec defines the desired state of RoleAutoScaler.
+            description: AutoScalerSpec defines the desired state of AutoScaler.
             properties:
-              adjustmentInterval:
-                default: 180
-                description: AdjustmentInterval is the number of seconds between scaling
-                  decisions.
-                type: integer
-              patternOptions:
-                description: PatternOptions defines the scaling pattern and per-role
-                  configuration.
+              implementation:
+                description: Implementation defines the scaling engine and its configuration.
+                properties:
+                  DynamoPlanner:
+                    description: DynamoPlanner configures the Dynamo-derived SLA-based
+                      planner.
+                    properties:
+                      dryRun:
+                        description: DryRun enables observe-only mode without actual
+                          scaling.
+                        type: boolean
+                      itl:
+                        description: ITL is the target Inter-Token Latency SLA in
+                          milliseconds.
+                        type: number
+                      loadPredictor:
+                        default: arima
+                        description: LoadPredictor selects the load prediction algorithm.
+                        enum:
+                        - arima
+                        - constant
+                        - prophet
+                        type: string
+                      metricsEndpoint:
+                        description: MetricsEndpoint configures the metrics collection
+                          endpoint.
+                        properties:
+                          metricSource:
+                            default: sglang
+                            description: MetricSource selects the metric source type.
+                            enum:
+                            - sglang
+                            - vllm
+                            - patio
+                            type: string
+                          port:
+                            default: 9091
+                            description: Port is the port for planner's own Prometheus
+                              metrics exposition.
+                            type: integer
+                        type: object
+                      modelName:
+                        description: ModelName is the model name used for Prometheus
+                          label filtering.
+                        type: string
+                      noCorrection:
+                        description: NoCorrection disables SLA correction factors.
+                        type: boolean
+                      predictionWindow:
+                        default: 50
+                        description: PredictionWindow is the number of data points
+                          in the predictor window.
+                        type: integer
+                      profiling:
+                        description: Profiling configures automatic SLA profiling.
+                        properties:
+                          image:
+                            description: |-
+                              Image is the container image for the profiling tool.
+                              If empty, a default image is used.
+                            type: string
+                        type: object
+                      ttft:
+                        description: TTFT is the target Time to First Token SLA in
+                          milliseconds.
+                        type: number
+                    required:
+                    - itl
+                    - modelName
+                    - profiling
+                    - ttft
+                    type: object
+                type: object
+              pattern:
+                description: Pattern defines the scaling pattern and per-role configuration.
                 properties:
                   PDDisaggregated:
                     description: PDDisaggregated configures Prefill/Decode disaggregated
@@ -153,94 +220,21 @@ spec:
                     - roleName
                     type: object
                 type: object
-              scalerEngine:
-                description: ScalerEngine defines the scaling engine and its configuration.
-                properties:
-                  DynamoPlanner:
-                    description: DynamoPlanner configures the Dynamo-derived SLA-based
-                      planner.
-                    properties:
-                      dryRun:
-                        description: DryRun enables observe-only mode without actual
-                          scaling.
-                        type: boolean
-                      image:
-                        description: Image is the container image for the planner
-                          engine.
-                        type: string
-                      itl:
-                        description: ITL is the target Inter-Token Latency SLA in
-                          milliseconds.
-                        type: number
-                      loadPredictor:
-                        default: arima
-                        description: LoadPredictor selects the load prediction algorithm.
-                        enum:
-                        - arima
-                        - constant
-                        - prophet
-                        type: string
-                      metricsEndpoint:
-                        description: MetricsEndpoint configures the metrics collection
-                          endpoint.
-                        properties:
-                          metricSource:
-                            default: sglang
-                            description: MetricSource selects the metric source type.
-                            enum:
-                            - sglang
-                            - vllm
-                            - patio
-                            type: string
-                          port:
-                            default: 9091
-                            description: Port is the port for planner's own Prometheus
-                              metrics exposition.
-                            type: integer
-                        type: object
-                      modelName:
-                        description: ModelName is the model name used for Prometheus
-                          label filtering.
-                        type: string
-                      noCorrection:
-                        description: NoCorrection disables SLA correction factors.
-                        type: boolean
-                      predictionWindow:
-                        default: 50
-                        description: PredictionWindow is the number of data points
-                          in the predictor window.
-                        type: integer
-                      profiling:
-                        description: Profiling configures automatic SLA profiling.
-                        properties:
-                          image:
-                            description: |-
-                              Image is the container image for the profiling tool.
-                              If empty, a default image is used.
-                            type: string
-                        type: object
-                      ttft:
-                        description: TTFT is the target Time to First Token SLA in
-                          milliseconds.
-                        type: number
-                    required:
-                    - image
-                    - itl
-                    - modelName
-                    - profiling
-                    - ttft
-                    type: object
-                type: object
+              scalingInterval:
+                default: 180
+                description: ScalingInterval is the number of seconds between scaling
+                  decisions.
+                type: integer
             required:
-            - patternOptions
-            - scalerEngine
+            - implementation
+            - pattern
             type: object
           status:
-            description: RoleAutoScalerStatus defines the observed state of RoleAutoScaler.
+            description: AutoScalerStatus defines the observed state of AutoScaler.
             properties:
               conditions:
                 description: Conditions represent the latest available observations
-                  of the RoleAutoScaler's state.
+                  of the AutoScaler's state.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -305,7 +299,7 @@ spec:
                 format: date-time
                 type: string
               phase:
-                description: Phase indicates the current phase of the RoleAutoScaler.
+                description: Phase indicates the current phase of the AutoScaler.
                 enum:
                 - Pending
                 - Initializing

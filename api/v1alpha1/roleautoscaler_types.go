@@ -20,23 +20,23 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// RoleAutoScalerSpec defines the desired state of RoleAutoScaler.
-type RoleAutoScalerSpec struct {
-	// AdjustmentInterval is the number of seconds between scaling decisions.
+// AutoScalerSpec defines the desired state of AutoScaler.
+type AutoScalerSpec struct {
+	// ScalingInterval is the number of seconds between scaling decisions.
 	// +optional
 	// +kubebuilder:default=180
-	AdjustmentInterval int `json:"adjustmentInterval,omitempty"`
+	ScalingInterval int `json:"scalingInterval,omitempty"`
 
-	// PatternOptions defines the scaling pattern and per-role configuration.
-	PatternOptions PatternOptions `json:"patternOptions"`
+	// Pattern defines the scaling pattern and per-role configuration.
+	Pattern Pattern `json:"pattern"`
 
-	// ScalerEngine defines the scaling engine and its configuration.
-	ScalerEngine ScalerEngine `json:"scalerEngine"`
+	// Implementation defines the scaling engine and its configuration.
+	Implementation Implementation `json:"implementation"`
 }
 
-// PatternOptions is a discriminated union of scaling patterns.
+// Pattern is a discriminated union of scaling patterns.
 // Exactly one field must be set.
-type PatternOptions struct {
+type Pattern struct {
 	// PDDisaggregated configures Prefill/Decode disaggregated scaling.
 	// +optional
 	PDDisaggregated *PDDisaggregatedPattern `json:"PDDisaggregated,omitempty"`
@@ -88,9 +88,9 @@ type UnifiedPattern struct {
 	MinReplicas int32 `json:"minReplicas"`
 }
 
-// ScalerEngine is a discriminated union of scaling engines.
+// Implementation is a discriminated union of scaling engines.
 // Exactly one field must be set.
-type ScalerEngine struct {
+type Implementation struct {
 	// DynamoPlanner configures the Dynamo-derived SLA-based planner.
 	// +optional
 	DynamoPlanner *DynamoPlannerConfig `json:"DynamoPlanner,omitempty"`
@@ -98,9 +98,6 @@ type ScalerEngine struct {
 
 // DynamoPlannerConfig defines configuration for the Dynamo planner engine.
 type DynamoPlannerConfig struct {
-	// Image is the container image for the planner engine.
-	Image string `json:"image"`
-
 	// ModelName is the model name used for Prometheus label filtering.
 	ModelName string `json:"modelName"`
 
@@ -159,24 +156,24 @@ type MetricsEndpointConfig struct {
 	Port int `json:"port,omitempty"`
 }
 
-// RoleAutoScalerPhase represents the current phase of a RoleAutoScaler.
+// AutoScalerPhase represents the current phase of an AutoScaler.
 // +kubebuilder:validation:Enum=Pending;Initializing;Ready;Failed
-type RoleAutoScalerPhase string
+type AutoScalerPhase string
 
 const (
-	PhasePending      RoleAutoScalerPhase = "Pending"
-	PhaseInitializing RoleAutoScalerPhase = "Initializing"
-	PhaseReady        RoleAutoScalerPhase = "Ready"
-	PhaseFailed       RoleAutoScalerPhase = "Failed"
+	PhasePending      AutoScalerPhase = "Pending"
+	PhaseInitializing AutoScalerPhase = "Initializing"
+	PhaseReady        AutoScalerPhase = "Ready"
+	PhaseFailed       AutoScalerPhase = "Failed"
 )
 
-// RoleAutoScalerStatus defines the observed state of RoleAutoScaler.
-type RoleAutoScalerStatus struct {
-	// Phase indicates the current phase of the RoleAutoScaler.
+// AutoScalerStatus defines the observed state of AutoScaler.
+type AutoScalerStatus struct {
+	// Phase indicates the current phase of the AutoScaler.
 	// +optional
-	Phase RoleAutoScalerPhase `json:"phase,omitempty"`
+	Phase AutoScalerPhase `json:"phase,omitempty"`
 
-	// Conditions represent the latest available observations of the RoleAutoScaler's state.
+	// Conditions represent the latest available observations of the AutoScaler's state.
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 
@@ -205,33 +202,33 @@ type RoleAutoScalerStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:storageversion
-// +kubebuilder:resource:shortName={ras}
+// +kubebuilder:resource:shortName={as}
 // +kubebuilder:printcolumn:name="PHASE",type="string",JSONPath=".status.phase",description="Current phase"
 // +kubebuilder:printcolumn:name="PREFILL",type="integer",JSONPath=".status.prefillReplicas",description="Prefill replicas"
 // +kubebuilder:printcolumn:name="DECODE",type="integer",JSONPath=".status.decodeReplicas",description="Decode replicas"
 // +kubebuilder:printcolumn:name="AGE",type="date",JSONPath=".metadata.creationTimestamp"
 
-// RoleAutoScaler is the Schema for the roleautoscalers API.
-// A RoleAutoScaler automatically scales roles within a RoleBasedGroup
-// to meet SLA targets. The RoleAutoScaler name must match the target
+// AutoScaler is the Schema for the autoscalers API.
+// An AutoScaler automatically scales roles within a RoleBasedGroup
+// to meet SLA targets. The AutoScaler name must match the target
 // RoleBasedGroup name in the same namespace.
-type RoleAutoScaler struct {
+type AutoScaler struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   RoleAutoScalerSpec   `json:"spec,omitempty"`
-	Status RoleAutoScalerStatus `json:"status,omitempty"`
+	Spec   AutoScalerSpec   `json:"spec,omitempty"`
+	Status AutoScalerStatus `json:"status,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 
-// RoleAutoScalerList contains a list of RoleAutoScaler.
-type RoleAutoScalerList struct {
+// AutoScalerList contains a list of AutoScaler.
+type AutoScalerList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []RoleAutoScaler `json:"items"`
+	Items           []AutoScaler `json:"items"`
 }
 
 func init() {
-	SchemeBuilder.Register(&RoleAutoScaler{}, &RoleAutoScalerList{})
+	SchemeBuilder.Register(&AutoScaler{}, &AutoScalerList{})
 }

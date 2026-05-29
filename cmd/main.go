@@ -60,19 +60,19 @@ func main() {
 		Scheme:                 scheme,
 		HealthProbeBindAddress: healthProbeAddr,
 		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "rbg-planner.rolebasedgroup.inference-extension.io",
+		LeaderElectionID:       "rbg-planner.inference-extension.rolebasedgroup.io",
 	})
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
 	}
 
-	if err = (&controller.RoleAutoScalerReconciler{
+	if err = (&controller.AutoScalerReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("roleautoscaler-controller"),
+		Recorder: mgr.GetEventRecorderFor("autoscaler-controller"),
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "RoleAutoScaler")
+		setupLog.Error(err, "unable to create controller", "controller", "AutoScaler")
 		os.Exit(1)
 	}
 
