@@ -43,7 +43,10 @@ metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const (
-	finalizerName = "rolebasedgroup.inference-extension.io/finalizer"
+	finalizerName = "inference-extension.rolebasedgroup.io/finalizer"
+
+	// Default planner image hardcoded in the operator.
+	defaultPlannerImage = "ghcr.io/rolebasedgroup/rbg-planner:latest"
 
 	// Default profiler image hardcoded in the operator.
 	defaultProfilerImage = "ghcr.io/rolebasedgroup/rbg-profiler:latest"
@@ -62,31 +65,31 @@ const (
 
 var rbgGVR = schema.GroupVersionResource{Group: rbgGroup, Version: rbgVersion, Resource: rbgPlural}
 
-// RoleAutoScalerReconciler reconciles a RoleAutoScaler object.
-type RoleAutoScalerReconciler struct {
+// AutoScalerReconciler reconciles an AutoScaler object.
+type AutoScalerReconciler struct {
 	client.Client
 	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
 }
 
-// +kubebuilder:rbac:groups=rolebasedgroup.inference-extension.io,resources=roleautoscalers,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=rolebasedgroup.inference-extension.io,resources=roleautoscalers/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=rolebasedgroup.inference-extension.io,resources=roleautoscalers/finalizers,verbs=update
+// +kubebuilder:rbac:groups=inference-extension.rolebasedgroup.io,resources=autoscalers,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=inference-extension.rolebasedgroup.io,resources=autoscalers/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=inference-extension.rolebasedgroup.io,resources=autoscalers/finalizers,verbs=update
 // +kubebuilder:rbac:groups=workloads.x-k8s.io,resources=rolebasedgroups,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts;configmaps,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=get;list;watch;create;update;delete
 
-func (r *RoleAutoScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+func (r *AutoScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
-	// 1. Fetch the RoleAutoScaler CR.
+	// 1. Fetch the AutoScaler CR.
 	ras := &unstructured.Unstructured{}
 	ras.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "rolebasedgroup.inference-extension.io",
+		Group:   "inference-extension.rolebasedgroup.io",
 		Version: "v1alpha1",
-		Kind:    "RoleAutoScaler",
+		Kind:    "AutoScaler",
 	})
 	if err := r.Get(ctx, req.NamespacedName, ras); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -98,7 +101,7 @@ func (r *RoleAutoScalerReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// Parse spec from unstructured — we use typed access via helpers.
 	spec, err := parseRASSpec(ras)
 	if err != nil {
-		logger.Error(err, "failed to parse RoleAutoScaler spec")
+		logger.Error(err, "failed to parse AutoScaler spec")
 		return ctrl.Result{}, r.setPhase(ctx, ras, "Failed", "InvalidSpec", err.Error())
 	}
 
@@ -181,12 +184,12 @@ func (r *RoleAutoScalerReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	logger.Info("reconcile complete", "phase", "Ready")
-	return ctrl.Result{RequeueAfter: time.Duration(spec.adjustmentInterval) * time.Second}, nil
+	return ctrl.Result{RequeueAfter: time.Duration(spec.scalingInterval) * time.Second}, nil
 }
 
-// parsedSpec holds the parsed RoleAutoScaler spec fields.
+// parsedSpec holds the parsed AutoScaler spec fields.
 type parsedSpec struct {
-	adjustmentInterval int
+	scalingInterval int
 	prefillRoleName    string
 	decodeRoleName     string
 	prefillMinReplicas int32
@@ -213,14 +216,14 @@ func parseRASSpec(ras *unstructured.Unstructured) (*parsedSpec, error) {
 	}
 
 	s := &parsedSpec{
-		adjustmentInterval: getIntField(spec, "adjustmentInterval", 180),
+		scalingInterval: getIntField(spec, "scalingInterval", 180),
 	}
 
-	// patternOptions.PDDisaggregated
-	po, _ := spec["patternOptions"].(map[string]interface{})
+	// pattern.PDDisaggregated
+	po, _ := spec["pattern"].(map[string]interface{})
 	pd, _ := po["PDDisaggregated"].(map[string]interface{})
 	if pd == nil {
-		return nil, fmt.Errorf("patternOptions.PDDisaggregated is required")
+		return nil, fmt.Errorf("pattern.PDDisaggregated is required")
 	}
 	prefill, _ := pd["prefill"].(map[string]interface{})
 	decode, _ := pd["decode"].(map[string]interface{})
@@ -231,16 +234,13 @@ func parseRASSpec(ras *unstructured.Unstructured) (*parsedSpec, error) {
 	s.decodeMinReplicas = int32(getIntField(decode, "minReplicas", 1))
 	s.decodeMaxReplicas = int32(getIntField(decode, "maxReplicas", 1))
 
-	// scalerEngine.DynamoPlanner
-	se, _ := spec["scalerEngine"].(map[string]interface{})
+	// implementation.DynamoPlanner
+	se, _ := spec["implementation"].(map[string]interface{})
 	dp, _ := se["DynamoPlanner"].(map[string]interface{})
 	if dp == nil {
-		return nil, fmt.Errorf("scalerEngine.DynamoPlanner is required")
+		return nil, fmt.Errorf("implementation.DynamoPlanner is required")
 	}
-	s.plannerImage = getStrField(dp, "image", "")
-	if s.plannerImage == "" {
-		return nil, fmt.Errorf("scalerEngine.DynamoPlanner.image is required")
-	}
+	s.plannerImage = defaultPlannerImage
 	s.modelName = getStrField(dp, "modelName", "")
 	s.ttft = getFloatField(dp, "ttft", 500.0)
 	s.itl = getFloatField(dp, "itl", 50.0)
@@ -263,7 +263,7 @@ func parseRASSpec(ras *unstructured.Unstructured) (*parsedSpec, error) {
 
 // --- RBAC ---
 
-func (r *RoleAutoScalerReconciler) ensureRBAC(ctx context.Context, ras *unstructured.Unstructured) error {
+func (r *AutoScalerReconciler) ensureRBAC(ctx context.Context, ras *unstructured.Unstructured) error {
 	name := ras.GetName()
 	namespace := ras.GetNamespace()
 	saName := name + "-planner"
@@ -311,8 +311,8 @@ func (r *RoleAutoScalerReconciler) ensureRBAC(ctx context.Context, ras *unstruct
 			Name: crbName,
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by":            "rbg-planner-operator",
-				"rolebasedgroup.inference-extension.io/ras-name":      name,
-				"rolebasedgroup.inference-extension.io/ras-namespace": namespace,
+				"inference-extension.rolebasedgroup.io/as-name":      name,
+				"inference-extension.rolebasedgroup.io/as-namespace": namespace,
 			},
 		},
 		RoleRef: rbacv1.RoleRef{
@@ -339,7 +339,7 @@ func (r *RoleAutoScalerReconciler) ensureRBAC(ctx context.Context, ras *unstruct
 	return nil
 }
 
-func (r *RoleAutoScalerReconciler) cleanupClusterResources(ctx context.Context, ras *unstructured.Unstructured) error {
+func (r *AutoScalerReconciler) cleanupClusterResources(ctx context.Context, ras *unstructured.Unstructured) error {
 	crbName := ras.GetName() + "-planner-binding"
 	crb := &rbacv1.ClusterRoleBinding{}
 	if err := r.Get(ctx, types.NamespacedName{Name: crbName}, crb); err != nil {
@@ -353,7 +353,7 @@ func (r *RoleAutoScalerReconciler) cleanupClusterResources(ctx context.Context, 
 
 // --- Profiling ---
 
-func (r *RoleAutoScalerReconciler) handleProfiling(ctx context.Context, ras *unstructured.Unstructured, spec *parsedSpec) (string, bool, error) {
+func (r *AutoScalerReconciler) handleProfiling(ctx context.Context, ras *unstructured.Unstructured, spec *parsedSpec) (string, bool, error) {
 	name := ras.GetName()
 	namespace := ras.GetNamespace()
 	cmName := name + "-profiling"
@@ -398,7 +398,7 @@ func (r *RoleAutoScalerReconciler) handleProfiling(ctx context.Context, ras *uns
 	return "", false, nil
 }
 
-func (r *RoleAutoScalerReconciler) createProfilingJob(ctx context.Context, ras *unstructured.Unstructured, spec *parsedSpec, jobName, cmName string) error {
+func (r *AutoScalerReconciler) createProfilingJob(ctx context.Context, ras *unstructured.Unstructured, spec *parsedSpec, jobName, cmName string) error {
 	namespace := ras.GetNamespace()
 	rbgName := ras.GetName()
 	saName := rbgName + "-planner"
@@ -443,7 +443,7 @@ func (r *RoleAutoScalerReconciler) createProfilingJob(ctx context.Context, ras *
 
 // --- Planner Deployment ---
 
-func (r *RoleAutoScalerReconciler) ensurePlannerDeployment(ctx context.Context, ras *unstructured.Unstructured, spec *parsedSpec, profilingCM string, prefillGPUs, decodeGPUs int) error {
+func (r *AutoScalerReconciler) ensurePlannerDeployment(ctx context.Context, ras *unstructured.Unstructured, spec *parsedSpec, profilingCM string, prefillGPUs, decodeGPUs int) error {
 	name := ras.GetName()
 	namespace := ras.GetNamespace()
 	deployName := name + "-planner"
@@ -536,7 +536,7 @@ func buildPlannerEnv(rbgName string, spec *parsedSpec, namespace string, maxGPUB
 		{Name: "PROMETHEUS_ENDPOINT", Value: defaultPrometheusEndpoint},
 		{Name: "METRIC_SOURCE", Value: spec.metricSource},
 		{Name: "MODEL_NAME", Value: spec.modelName},
-		{Name: "ADJUSTMENT_INTERVAL", Value: strconv.Itoa(spec.adjustmentInterval)},
+		{Name: "ADJUSTMENT_INTERVAL", Value: strconv.Itoa(spec.scalingInterval)},
 		{Name: "MAX_GPU_BUDGET", Value: strconv.Itoa(maxGPUBudget)},
 		{Name: "MIN_REPLICAS", Value: strconv.Itoa(int(spec.prefillMinReplicas))},
 		{Name: "PREFILL_ENGINE_NUM_GPU", Value: strconv.Itoa(prefillGPUs)},
@@ -554,7 +554,7 @@ func buildPlannerEnv(rbgName string, spec *parsedSpec, namespace string, maxGPUB
 
 // --- Status ---
 
-func (r *RoleAutoScalerReconciler) updateReadyStatus(ctx context.Context, ras *unstructured.Unstructured, rbg *unstructured.Unstructured, spec *parsedSpec, profilingCM string) error {
+func (r *AutoScalerReconciler) updateReadyStatus(ctx context.Context, ras *unstructured.Unstructured, rbg *unstructured.Unstructured, spec *parsedSpec, profilingCM string) error {
 	deployName := ras.GetName() + "-planner"
 
 	// Read replica counts from RBG status.
@@ -586,7 +586,7 @@ func (r *RoleAutoScalerReconciler) updateReadyStatus(ctx context.Context, ras *u
 	return r.Status().Update(ctx, ras)
 }
 
-func (r *RoleAutoScalerReconciler) setPhase(ctx context.Context, ras *unstructured.Unstructured, phase, reason, message string) error {
+func (r *AutoScalerReconciler) setPhase(ctx context.Context, ras *unstructured.Unstructured, phase, reason, message string) error {
 	status, _ := ras.Object["status"].(map[string]interface{})
 	if status == nil {
 		status = map[string]interface{}{}
@@ -697,7 +697,7 @@ func ownerRef(ras *unstructured.Unstructured) metav1.OwnerReference {
 	}
 }
 
-func (r *RoleAutoScalerReconciler) createIfNotExists(ctx context.Context, obj client.Object) error {
+func (r *AutoScalerReconciler) createIfNotExists(ctx context.Context, obj client.Object) error {
 	err := r.Create(ctx, obj)
 	if apierrors.IsAlreadyExists(err) {
 		return nil
@@ -705,7 +705,7 @@ func (r *RoleAutoScalerReconciler) createIfNotExists(ctx context.Context, obj cl
 	return err
 }
 
-func (r *RoleAutoScalerReconciler) createOrUpdate(ctx context.Context, obj client.Object, mutateFn func()) error {
+func (r *AutoScalerReconciler) createOrUpdate(ctx context.Context, obj client.Object, mutateFn func()) error {
 	key := types.NamespacedName{Name: obj.GetName(), Namespace: obj.GetNamespace()}
 	existing := obj.DeepCopyObject().(client.Object)
 	err := r.Get(ctx, key, existing)
@@ -781,11 +781,11 @@ const (
 )
 
 // SetupWithManager sets up the controller with the Manager.
-func (r *RoleAutoScalerReconciler) SetupWithManager(mgr ctrl.Manager) error {
+func (r *AutoScalerReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&rbgv1alpha1.RoleAutoScaler{}).
+		For(&rbgv1alpha1.AutoScaler{}).
 		Owns(&appsv1.Deployment{}).
 		Owns(&batchv1.Job{}).
-		Named("roleautoscaler").
+		Named("autoscaler").
 		Complete(r)
 }
