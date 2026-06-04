@@ -46,13 +46,13 @@ const (
 	finalizerName = "inference-extension.rolebasedgroup.io/finalizer"
 
 	// Default planner image hardcoded in the operator.
-	defaultPlannerImage = "registry-cn-hangzhou.ack.aliyuncs.com/dev/rbg-role-autoscaler-planner:v0.0.1"
+	defaultPlannerImage = "ghcr.io/rolebasedgroup/rbg-planner:latest"
 
 	// Default profiler image hardcoded in the operator.
-	defaultProfilerImage = "registry-cn-hangzhou.ack.aliyuncs.com/dev/rbg-role-autoscaler-profiler:v0.0.1"
+	defaultProfilerImage = "ghcr.io/rolebasedgroup/rbg-profiler:latest"
 
 	// Default Prometheus endpoint (in-cluster).
-	defaultPrometheusEndpoint = "http://prometheus.demo.svc.cluster.local:9090"
+	defaultPrometheusEndpoint = "http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090"
 
 	// ClusterRole name shared by all planner instances.
 	plannerClusterRoleName = "rbg-planner-role"
@@ -423,9 +423,6 @@ func (r *AutoScalerReconciler) createProfilingJob(ctx context.Context, ras *unst
 				Spec: corev1.PodSpec{
 					ServiceAccountName: saName,
 					RestartPolicy:      corev1.RestartPolicyNever,
-					ImagePullSecrets: []corev1.LocalObjectReference{
-						{Name: "acs-dev-acr"},
-					},
 					Containers: []corev1.Container{
 						{
 							Name:  "profiler",
@@ -485,14 +482,10 @@ func (r *AutoScalerReconciler) ensurePlannerDeployment(ctx context.Context, ras 
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: saName,
-					ImagePullSecrets: []corev1.LocalObjectReference{
-						{Name: "acs-dev-acr"},
-					},
 					Containers: []corev1.Container{
 						{
-							Name:            "planner",
-							Image:           spec.plannerImage,
-							ImagePullPolicy: corev1.PullAlways,
+							Name:  "planner",
+							Image: spec.plannerImage,
 							Env:             buildPlannerEnv(name, spec, namespace, maxGPUBudget, prefillGPUs, decodeGPUs),
 							Ports: []corev1.ContainerPort{
 								{Name: "metrics", ContainerPort: int32(spec.metricsPort), Protocol: corev1.ProtocolTCP},
