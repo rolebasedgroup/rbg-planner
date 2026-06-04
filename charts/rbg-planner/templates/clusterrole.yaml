@@ -1,0 +1,31 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "rbg-planner.fullname" . }}
+  labels:
+    {{- include "rbg-planner.labels" . | nindent 4 }}
+rules:
+- apiGroups: [""]
+  resources: ["configmaps", "serviceaccounts"]
+  verbs: ["create", "delete", "get", "list", "update", "watch"]
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["create", "delete", "get", "list", "watch"]
+- apiGroups: ["inference-extension.rolebasedgroup.io"]
+  resources: ["autoscalers"]
+  verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
+- apiGroups: ["inference-extension.rolebasedgroup.io"]
+  resources: ["autoscalers/finalizers"]
+  verbs: ["update"]
+- apiGroups: ["inference-extension.rolebasedgroup.io"]
+  resources: ["autoscalers/status"]
+  verbs: ["get", "patch", "update"]
+- apiGroups: ["rbac.authorization.k8s.io"]
+  resources: ["clusterrolebindings", "clusterroles"]
+  verbs: ["create", "delete", "get", "list", "update", "watch"]
+- apiGroups: ["workloads.x-k8s.io"]
+  resources: ["rolebasedgroups"]
+  verbs: ["get", "list", "watch"]

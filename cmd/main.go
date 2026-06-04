@@ -46,10 +46,16 @@ func main() {
 	var metricsAddr string
 	var healthProbeAddr string
 	var enableLeaderElection bool
+	var plannerImage string
+	var profilerImage string
+	var prometheusEndpoint string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&healthProbeAddr, "health-probe-bind-address", ":8081", "The address the health probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false, "Enable leader election for controller manager.")
+	flag.StringVar(&plannerImage, "planner-image", "", "Override default planner image.")
+	flag.StringVar(&profilerImage, "profiler-image", "", "Override default profiler image.")
+	flag.StringVar(&prometheusEndpoint, "prometheus-endpoint", "", "Override default Prometheus endpoint.")
 
 	opts := zap.Options{Development: true}
 	opts.BindFlags(flag.CommandLine)
@@ -70,9 +76,12 @@ func main() {
 	}
 
 	if err = (&controller.AutoScalerReconciler{
-		Client:   mgr.GetClient(),
-		Scheme:   mgr.GetScheme(),
-		Recorder: mgr.GetEventRecorderFor("autoscaler-controller"),
+		Client:             mgr.GetClient(),
+		Scheme:             mgr.GetScheme(),
+		Recorder:           mgr.GetEventRecorderFor("autoscaler-controller"),
+		PlannerImage:       plannerImage,
+		ProfilerImage:      profilerImage,
+		PrometheusEndpoint: prometheusEndpoint,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AutoScaler")
 		os.Exit(1)
