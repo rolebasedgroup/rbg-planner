@@ -1,0 +1,84 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: traffic-simulator
+  namespace: demo
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 7200
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: bench
+          image: lmsysorg/sglang:v0.5.12.post1
+          imagePullPolicy: IfNotPresent
+          command:
+            - python3
+            - -c
+            - |
+              import subprocess, sys, time
+
+              BASE_URL = "http://sglang-pd-inference-processor-0.s-sglang-pd-inference-processor.demo.svc.cluster.local:8000"
+              MODEL = "qwen3-6"
+              TOKENIZER = "/models/qwen-qwen3.6-35b-a3b/main"
+              INPUT_LEN = "2048"
+              OUTPUT_LEN = "1024"
+
+              # Traffic pattern: (rate, duration_seconds, label)
+              # Infinite loop: medium(3min) -> high(3min) -> low(3min)
+              PATTERN = [
+                  (2, 180, "medium"),
+                  (3, 180, "high"),
+                  (1, 180, "low"),
+              ]
+
+              def run_bench(rate, duration_sec, label, round_num):
+                  # Calculate num_prompts from rate * duration
+                  num_prompts = int(rate * duration_sec)
+                  print(f"\n{'='*60}", flush=True)
+                  print(f"Round {round_num} - {label}: rate={rate} req/s, duration={duration_sec}s, prompts={num_prompts}", flush=True)
+                  print(f"{'='*60}", flush=True)
+
+                  cmd = [
+                      sys.executable, "-m", "sglang.bench_serving",
+                      "--backend", "sglang-oai",
+                      "--base-url", BASE_URL,
+                      "--model", MODEL,
+                      "--tokenizer", TOKENIZER,
+                      "--dataset-name", "random-ids",
+                      "--random-input-len", INPUT_LEN,
+                      "--random-output-len", OUTPUT_LEN,
+                      "--random-range-ratio", "0.8",
+                      "--num-prompts", str(num_prompts),
+                      "--request-rate", str(rate),
+                      "--disable-tqdm",
+                  ]
+                  while True:
+                      proc = subprocess.run(cmd, capture_output=False)
+                      if proc.returncode == 0:
+                          print(f"[{label}] finished successfully", flush=True)
+                          break
+                      print(f"[{label}] failed (exit {proc.returncode}), retrying in 10s...", flush=True)
+                      time.sleep(10)
+
+              print("Starting traffic simulation: infinite loop of medium->high->low", flush=True)
+              r = 1
+              while True:
+                  for rate, duration, label in PATTERN:
+                      run_bench(rate, duration, label, r)
+                  r += 1
+          volumeMounts:
+            - name: model-storage
+              mountPath: /models
+              readOnly: true
+      nodeName: e01-cn-ow74ku7yn01
+      tolerations:
+        - key: "node-role.alibabacloud.com/lingjun"
+          operator: "Exists"
+          effect: "NoSchedule"
+      volumes:
+        - name: model-storage
+          hostPath:
+            path: /mnt/models
+            type: Directory

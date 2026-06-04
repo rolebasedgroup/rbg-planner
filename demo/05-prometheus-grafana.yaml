@@ -1,0 +1,172 @@
+## Prometheus
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: prometheus-config
+  namespace: demo
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+    scrape_configs:
+      - job_name: 'dynamo-frontend'
+        metrics_path: '/metrics'
+        static_configs:
+          - targets: ['sglang-pd-inference-processor-0.s-sglang-pd-inference-processor.demo.svc.cluster.local:8000']
+      - job_name: 'rbg-planner'
+        honor_labels: true
+        static_configs:
+          - targets: ['rbg-planner-metrics.demo.svc.cluster.local:9091']
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      containers:
+      - name: prometheus
+        image: prom/prometheus:v2.53.0
+        args:
+        - --config.file=/etc/prometheus/prometheus.yml
+        - --storage.tsdb.retention.time=7d
+        ports:
+        - containerPort: 9090
+        volumeMounts:
+        - name: config
+          mountPath: /etc/prometheus
+      volumes:
+      - name: config
+        configMap:
+          name: prometheus-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus
+  namespace: demo
+spec:
+  selector:
+    app: prometheus
+  ports:
+  - port: 9090
+    targetPort: 9090
+
+## Planner metrics service (for Prometheus to scrape)
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: rbg-planner-metrics
+  namespace: demo
+spec:
+  selector:
+    app.kubernetes.io/name: rbg-planner
+  ports:
+  - name: metrics
+    port: 9091
+    targetPort: 9091
+
+## Grafana
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasource
+  namespace: demo
+data:
+  datasource.yaml: |
+    apiVersion: 1
+    datasources:
+    - name: Prometheus
+      type: prometheus
+      url: http://prometheus.demo.svc.cluster.local:9090
+      access: proxy
+      isDefault: true
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-provider
+  namespace: demo
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+    - name: default
+      orgId: 1
+      folder: ''
+      type: file
+      disableDeletion: false
+      editable: true
+      options:
+        path: /var/lib/grafana/dashboards
+        foldersFromFilesStructure: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: demo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+      - name: grafana
+        image: grafana/grafana:11.6.0
+        env:
+        - name: GF_AUTH_ANONYMOUS_ENABLED
+          value: "true"
+        - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+          value: Admin
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          value: admin
+        ports:
+        - containerPort: 3000
+        volumeMounts:
+        - name: datasource
+          mountPath: /etc/grafana/provisioning/datasources
+        - name: dashboard-provider
+          mountPath: /etc/grafana/provisioning/dashboards
+        - name: dashboard-json
+          mountPath: /var/lib/grafana/dashboards
+      volumes:
+      - name: datasource
+        configMap:
+          name: grafana-datasource
+      - name: dashboard-provider
+        configMap:
+          name: grafana-dashboard-provider
+      - name: dashboard-json
+        configMap:
+          name: grafana-planner-dashboard
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana
+  namespace: demo
+spec:
+  selector:
+    app: grafana
+  ports:
+  - port: 3000
+    targetPort: 3000

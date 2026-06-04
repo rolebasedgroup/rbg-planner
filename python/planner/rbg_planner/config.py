@@ -17,13 +17,15 @@ class PlannerConfig:
         "PROMETHEUS_ENDPOINT",
         "http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090",
     )
-    metric_source: str = os.environ.get("METRIC_SOURCE", "sglang")  # sglang | vllm | patio
+    metric_source: str = os.environ.get("METRIC_SOURCE", "sglang")  # sglang | vllm | patio | dynamo
     model_name: str = os.environ.get("MODEL_NAME", "")
 
     # Planner parameters
     adjustment_interval: int = int(os.environ.get("ADJUSTMENT_INTERVAL", "180"))
     max_gpu_budget: int = int(os.environ.get("MAX_GPU_BUDGET", "8"))
     min_replicas: int = int(os.environ.get("MIN_REPLICAS", "1"))
+    max_prefill_replicas: int = int(os.environ.get("MAX_PREFILL_REPLICAS", "100"))
+    max_decode_replicas: int = int(os.environ.get("MAX_DECODE_REPLICAS", "100"))
     prefill_engine_num_gpu: int = int(os.environ.get("PREFILL_ENGINE_NUM_GPU", "1"))
     decode_engine_num_gpu: int = int(os.environ.get("DECODE_ENGINE_NUM_GPU", "1"))
     ttft_sla: float = float(os.environ.get("TTFT_SLA", "500.0"))  # milliseconds

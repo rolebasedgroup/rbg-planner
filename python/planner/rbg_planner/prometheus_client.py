@@ -40,6 +40,14 @@ METRIC_NAMES = {
         "prompt_tokens": "patio:prompt_tokens_total",
         "generation_tokens": "patio:generation_tokens_total",
     },
+    "dynamo": {
+        "ttft": "dynamo_frontend_time_to_first_token_seconds",
+        "itl": "dynamo_frontend_inter_token_latency_seconds",
+        "request_duration": "dynamo_frontend_request_duration_seconds",
+        "requests_total": "dynamo_frontend_requests_total",
+        "prompt_tokens": "dynamo_frontend_input_sequence_tokens",
+        "generation_tokens": "dynamo_frontend_output_sequence_tokens",
+    },
 }
 
 
@@ -60,21 +68,25 @@ class PrometheusMetricsClient:
             )
         self.metrics = METRIC_NAMES[metric_source]
         self.metric_source = metric_source
+        # dynamo uses 'model' label; sglang/vllm use 'model_name'
+        self.model_label = "model" if metric_source == "dynamo" else "model_name"
 
-    def _build_label_filter(self, model_name: Optional[str] = None) -> str:
+    def _build_label_filter(self, model_name: Optional[str] = None, role: Optional[str] = None) -> str:
         """Build PromQL label filter string."""
         filters = []
         if model_name:
-            filters.append(f'model_name="{model_name}"')
+            filters.append(f'{self.model_label}="{model_name}"')
+        if role:
+            filters.append(f'role="{role}"')
         if filters:
             return "{" + ",".join(filters) + "}"
         return ""
 
     def _query_avg_metric(
-        self, metric_name: str, interval: str, model_name: Optional[str] = None
+        self, metric_name: str, interval: str, model_name: Optional[str] = None, role: Optional[str] = None
     ) -> float:
         """Query average of a histogram metric: increase(sum)/increase(count)."""
-        label_filter = self._build_label_filter(model_name)
+        label_filter = self._build_label_filter(model_name, role=role)
         query = (
             f"increase({metric_name}_sum{label_filter}[{interval}])"
             f"/increase({metric_name}_count{label_filter}[{interval}])"
@@ -94,10 +106,10 @@ class PrometheusMetricsClient:
             return 0.0
 
     def _query_increase(
-        self, metric_name: str, interval: str, model_name: Optional[str] = None
+        self, metric_name: str, interval: str, model_name: Optional[str] = None, role: Optional[str] = None
     ) -> float:
         """Query increase of a counter metric."""
-        label_filter = self._build_label_filter(model_name)
+        label_filter = self._build_label_filter(model_name, role=role)
         query = f"increase({metric_name}{label_filter}[{interval}])"
         try:
             result = self.prom.custom_query(query=query)
@@ -130,10 +142,12 @@ class PrometheusMetricsClient:
         return self._query_increase(self.metrics["requests_total"], interval, model_name)
 
     def get_avg_input_sequence_tokens(self, interval: str, model_name: Optional[str] = None) -> float:
-        """Get average input sequence length (tokens).
+        """Get average input sequence length (tokens)."""
+        if self.metric_source == "dynamo":
+            # dynamo exposes ISL as a histogram; use sum/count
+            return self._query_avg_metric(self.metrics["prompt_tokens"], interval, model_name)
 
-        Computed as: increase(prompt_tokens_total) / increase(requests_total)
-        """
+        # sglang/vllm: counter ratio prompt_tokens_total / requests_total
         label_filter = self._build_label_filter(model_name)
         prompt_metric = self.metrics["prompt_tokens"]
         requests_metric = self.metrics["requests_total"]
@@ -154,10 +168,12 @@ class PrometheusMetricsClient:
             return 0.0
 
     def get_avg_output_sequence_tokens(self, interval: str, model_name: Optional[str] = None) -> float:
-        """Get average output sequence length (tokens).
+        """Get average output sequence length (tokens)."""
+        if self.metric_source == "dynamo":
+            # dynamo exposes OSL as a histogram; use sum/count
+            return self._query_avg_metric(self.metrics["generation_tokens"], interval, model_name)
 
-        Computed as: increase(generation_tokens_total) / increase(requests_total)
-        """
+        # sglang/vllm: counter ratio generation_tokens_total / requests_total
         label_filter = self._build_label_filter(model_name)
         gen_metric = self.metrics["generation_tokens"]
         requests_metric = self.metrics["requests_total"]

@@ -1,0 +1,354 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: profiler-script
+  namespace: demo
+data:
+  run_profiling.py: |
+    """SLA Profiler for Dynamo PD deployment.
+
+    Profiles prefill and decode engines through the frontend (processor) endpoint
+    using sglang.bench_serving. Generates profiling data compatible with the RBG
+    planner's perf_interpolation module.
+
+    Output: prefill_raw_data.json + decode_raw_data.json -> ConfigMap update.
+    """
+
+    import json
+    import logging
+    import os
+    import subprocess
+    import sys
+    import time
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+    )
+    logger = logging.getLogger(__name__)
+
+    # Configuration (from env)
+    BASE_URL = os.environ.get(
+        "BASE_URL",
+        "http://sglang-pd-inference-processor-0.s-sglang-pd-inference-processor.demo.svc.cluster.local:8000",
+    )
+    MODEL = os.environ.get("MODEL", "qwen3-6")
+    TOKENIZER = os.environ.get("TOKENIZER", "/models/qwen-qwen3.6-35b-a3b/main")
+    NUM_GPUS = int(os.environ.get("NUM_GPUS", "1"))
+    MAX_KV_TOKENS = int(os.environ.get("MAX_KV_TOKENS", "1529490"))
+    MAX_CONTEXT_LENGTH = int(os.environ.get("MAX_CONTEXT_LENGTH", "32768"))
+    OUTPUT_DIR = os.environ.get("OUTPUT_DIR", "/tmp/profiling_results")
+    CONFIGMAP_NAME = os.environ.get("CONFIGMAP_NAME", "sglang-pd-inference-profiling")
+    NAMESPACE = os.environ.get("NAMESPACE", "demo")
+    UPDATE_CONFIGMAP = os.environ.get("UPDATE_CONFIGMAP", "true").lower() == "true"
+
+    PREFILL_ISL_POINTS = [int(x) for x in os.environ.get(
+        "PREFILL_ISL_POINTS", "128,256,512,1024,1536,2048,3072,4096"
+    ).split(",")]
+    PREFILL_OSL = 5
+    PREFILL_NUM_PROMPTS = 5
+
+    DECODE_OSL = 500
+    DECODE_ISL_POINTS = [int(x) for x in os.environ.get(
+        "DECODE_ISL_POINTS", "256,512,1024,2048,3072"
+    ).split(",")]
+    DECODE_CONCURRENCY_GRANULARITY = int(os.environ.get("DECODE_GRANULARITY", "6"))
+
+
+    def run_bench(num_prompts, request_rate, input_len, output_len, result_file):
+        cmd = [
+            sys.executable, "-m", "sglang.bench_serving",
+            "--backend", "sglang-oai",
+            "--base-url", BASE_URL,
+            "--model", MODEL,
+            "--tokenizer", TOKENIZER,
+            "--dataset-name", "random-ids",
+            "--random-input-len", str(input_len),
+            "--random-output-len", str(output_len),
+            "--random-range-ratio", "1.0",
+            "--num-prompts", str(num_prompts),
+            "--request-rate", str(request_rate),
+            "--disable-tqdm",
+            "--output-file", result_file,
+        ]
+        logger.info(f"  bench: prompts={num_prompts} rate={request_rate} isl={input_len} osl={output_len}")
+
+        for attempt in range(3):
+            proc = subprocess.run(cmd, capture_output=True, text=True)
+            if proc.returncode == 0:
+                try:
+                    with open(result_file, "r") as f:
+                        lines = [l.strip() for l in f.readlines() if l.strip()]
+                        if lines:
+                            return json.loads(lines[-1])
+                except (json.JSONDecodeError, FileNotFoundError) as e:
+                    logger.warning(f"  Parse failed: {e}, attempt {attempt+1}")
+            else:
+                logger.warning(f"  bench failed (exit {proc.returncode}), attempt {attempt+1}")
+                if proc.stderr:
+                    logger.warning(f"  stderr: {proc.stderr[-300:]}")
+                time.sleep(5)
+        return None
+
+
+    def profile_prefill():
+        logger.info("=" * 60)
+        logger.info("PHASE 1: Prefill Profiling")
+        logger.info("=" * 60)
+
+        prefill_isl, prefill_ttft, prefill_thpt_per_gpu = [], [], []
+
+        for isl in PREFILL_ISL_POINTS:
+            if isl >= MAX_CONTEXT_LENGTH - 512:
+                continue
+            result_file = os.path.join(OUTPUT_DIR, f"prefill_isl{isl}.json")
+            result = run_bench(PREFILL_NUM_PROMPTS, float("inf"), isl, PREFILL_OSL, result_file)
+            if result is None:
+                continue
+
+            ttft_ms = result.get("mean_ttft_ms")
+            if ttft_ms is None or float(ttft_ms) <= 0:
+                logger.warning(f"  Invalid TTFT for ISL={isl}")
+                continue
+
+            ttft_ms = float(ttft_ms)
+            thpt = isl / ttft_ms * 1000 / NUM_GPUS
+
+            prefill_isl.append(isl)
+            prefill_ttft.append(round(ttft_ms, 2))
+            prefill_thpt_per_gpu.append(round(thpt, 2))
+            logger.info(f"  ISL={isl}: TTFT={ttft_ms:.2f}ms, thpt/gpu={thpt:.1f} tok/s")
+
+        return {"prefill_isl": prefill_isl, "prefill_ttft": prefill_ttft, "prefill_thpt_per_gpu": prefill_thpt_per_gpu}
+
+
+    def profile_decode():
+        logger.info("=" * 60)
+        logger.info("PHASE 2: Decode Profiling")
+        logger.info("=" * 60)
+
+        x_kv_usage, y_context_length, z_itl, z_thpt_per_gpu = [], [], [], []
+
+        for isl in DECODE_ISL_POINTS:
+            if isl + DECODE_OSL >= MAX_CONTEXT_LENGTH:
+                continue
+
+            context_length = isl + DECODE_OSL // 2
+            max_concurrency = min(MAX_KV_TOKENS // (isl + DECODE_OSL), 512)
+            if max_concurrency < 1:
+                continue
+
+            if max_concurrency <= DECODE_CONCURRENCY_GRANULARITY:
+                concurrency_points = list(range(1, max_concurrency + 1))
+            else:
+                step = (max_concurrency - 1) / (DECODE_CONCURRENCY_GRANULARITY - 1)
+                concurrency_points = sorted(set(
+                    max(1, int(1 + i * step))
+                    for i in range(DECODE_CONCURRENCY_GRANULARITY)
+                ))
+
+            logger.info(f"  ISL={isl}: ctx={context_length}, max_conc={max_concurrency}, sweep={concurrency_points}")
+
+            for conc in concurrency_points:
+                result_file = os.path.join(OUTPUT_DIR, f"decode_isl{isl}_conc{conc}.json")
+                result = run_bench(conc, float("inf"), isl, DECODE_OSL, result_file)
+                if result is None:
+                    continue
+
+                itl_ms = result.get("mean_itl_ms")
+                output_throughput = result.get("output_throughput")
+                if itl_ms is None or output_throughput is None:
+                    logger.warning(f"  Missing metrics for ISL={isl} conc={conc}")
+                    continue
+
+                itl_ms = float(itl_ms)
+                thpt_per_gpu = float(output_throughput) / NUM_GPUS
+                kv_usage = (isl + DECODE_OSL / 2) * conc / MAX_KV_TOKENS
+
+                x_kv_usage.append(round(kv_usage, 6))
+                y_context_length.append(context_length)
+                z_itl.append(round(itl_ms, 3))
+                z_thpt_per_gpu.append(round(thpt_per_gpu, 2))
+                logger.info(f"    conc={conc}: kv={kv_usage:.4f}, ITL={itl_ms:.2f}ms, thpt/gpu={thpt_per_gpu:.1f}")
+
+        return {
+            "x_kv_usage": x_kv_usage, "y_context_length": y_context_length,
+            "z_itl": z_itl, "z_thpt_per_gpu": z_thpt_per_gpu, "max_kv_tokens": MAX_KV_TOKENS,
+        }
+
+
+    def update_configmap(prefill_data, decode_data):
+        logger.info(f"Updating ConfigMap {NAMESPACE}/{CONFIGMAP_NAME}...")
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as pf:
+            json.dump(prefill_data, pf, indent=2)
+            prefill_file = pf.name
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as df:
+            json.dump(decode_data, df, indent=2)
+            decode_file = df.name
+
+        subprocess.run(["kubectl", "delete", "configmap", CONFIGMAP_NAME, "-n", NAMESPACE, "--ignore-not-found"], capture_output=True)
+        proc = subprocess.run([
+            "kubectl", "create", "configmap", CONFIGMAP_NAME, "-n", NAMESPACE,
+            f"--from-file=prefill_raw_data.json={prefill_file}",
+            f"--from-file=decode_raw_data.json={decode_file}",
+        ], capture_output=True, text=True)
+        if proc.returncode == 0:
+            logger.info(f"ConfigMap {CONFIGMAP_NAME} updated successfully")
+        else:
+            logger.error(f"Failed to update ConfigMap: {proc.stderr}")
+        os.unlink(prefill_file)
+        os.unlink(decode_file)
+
+
+    def main():
+        logger.info("SLA Profiler starting")
+        logger.info(f"  BASE_URL: {BASE_URL}")
+        logger.info(f"  MODEL: {MODEL}")
+        logger.info(f"  NUM_GPUS: {NUM_GPUS}")
+        logger.info(f"  MAX_KV_TOKENS: {MAX_KV_TOKENS}")
+        logger.info(f"  Prefill ISL: {PREFILL_ISL_POINTS}")
+        logger.info(f"  Decode ISL: {DECODE_ISL_POINTS}")
+
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+        prefill_data = profile_prefill()
+        decode_data = profile_decode()
+
+        prefill_path = os.path.join(OUTPUT_DIR, "prefill_raw_data.json")
+        decode_path = os.path.join(OUTPUT_DIR, "decode_raw_data.json")
+        with open(prefill_path, "w") as f:
+            json.dump(prefill_data, f, indent=2)
+        with open(decode_path, "w") as f:
+            json.dump(decode_data, f, indent=2)
+
+        logger.info("\n" + "=" * 60)
+        logger.info("PROFILING SUMMARY")
+        logger.info("=" * 60)
+        logger.info(f"Prefill: {len(prefill_data['prefill_isl'])} points")
+        for i, isl in enumerate(prefill_data["prefill_isl"]):
+            logger.info(f"  ISL={isl}: TTFT={prefill_data['prefill_ttft'][i]:.1f}ms, thpt/gpu={prefill_data['prefill_thpt_per_gpu'][i]:.0f}")
+        logger.info(f"Decode: {len(decode_data['x_kv_usage'])} points")
+        if decode_data["z_thpt_per_gpu"]:
+            logger.info(f"  thpt/gpu: {min(decode_data['z_thpt_per_gpu']):.0f} - {max(decode_data['z_thpt_per_gpu']):.0f} tok/s")
+            logger.info(f"  ITL: {min(decode_data['z_itl']):.1f} - {max(decode_data['z_itl']):.1f} ms")
+
+        if UPDATE_CONFIGMAP:
+            update_configmap(prefill_data, decode_data)
+
+        # Print JSON to stdout so results can be recovered from pod logs
+        print("\n===PREFILL_RAW_DATA_JSON_START===")
+        print(json.dumps(prefill_data, indent=2))
+        print("===PREFILL_RAW_DATA_JSON_END===")
+        print("\n===DECODE_RAW_DATA_JSON_START===")
+        print(json.dumps(decode_data, indent=2))
+        print("===DECODE_RAW_DATA_JSON_END===")
+
+        logger.info("Profiling complete!")
+
+
+    if __name__ == "__main__":
+        main()
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sla-profiler
+  namespace: demo
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sla-profiler
+  namespace: demo
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "create", "update", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sla-profiler
+  namespace: demo
+subjects:
+  - kind: ServiceAccount
+    name: sla-profiler
+    namespace: demo
+roleRef:
+  kind: Role
+  name: sla-profiler
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: sla-profiler
+  namespace: demo
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    spec:
+      serviceAccountName: sla-profiler
+      restartPolicy: Never
+      containers:
+        - name: profiler
+          image: lmsysorg/sglang:v0.5.12.post1
+          imagePullPolicy: IfNotPresent
+          command:
+            - python3
+            - /scripts/run_profiling.py
+          env:
+            - name: BASE_URL
+              value: "http://sglang-pd-inference-processor-0.s-sglang-pd-inference-processor.demo.svc.cluster.local:8000"
+            - name: MODEL
+              value: "qwen3-6"
+            - name: TOKENIZER
+              value: "/models/qwen-qwen3.6-35b-a3b/main"
+            - name: NUM_GPUS
+              value: "1"
+            - name: MAX_KV_TOKENS
+              value: "1529490"
+            - name: MAX_CONTEXT_LENGTH
+              value: "32768"
+            - name: CONFIGMAP_NAME
+              value: "sglang-pd-inference-profiling"
+            - name: NAMESPACE
+              value: "demo"
+            - name: UPDATE_CONFIGMAP
+              value: "false"
+            # Profiling grid
+            - name: PREFILL_ISL_POINTS
+              value: "128,256,512,1024,1536,2048,3072,4096"
+            - name: DECODE_ISL_POINTS
+              value: "256,512,1024,2048,3072"
+            - name: DECODE_GRANULARITY
+              value: "6"
+          volumeMounts:
+            - name: model-storage
+              mountPath: /models
+              readOnly: true
+            - name: profiler-script
+              mountPath: /scripts
+              readOnly: true
+            - name: profiling-output
+              mountPath: /output
+      nodeName: e01-cn-ow74ku7yn01
+      tolerations:
+        - key: "node-role.alibabacloud.com/lingjun"
+          operator: "Exists"
+          effect: "NoSchedule"
+      volumes:
+        - name: model-storage
+          hostPath:
+            path: /mnt/models
+            type: Directory
+        - name: profiler-script
+          configMap:
+            name: profiler-script
+        - name: profiling-output
+          hostPath:
+            path: /mnt/profiling_results
+            type: DirectoryOrCreate

@@ -73,6 +73,7 @@ spec:
                           scaling.
                         type: boolean
                       itl:
+                        default: 50
                         description: ITL is the target Inter-Token Latency SLA in
                           milliseconds.
                         type: number
@@ -124,14 +125,10 @@ spec:
                             type: string
                         type: object
                       ttft:
+                        default: 500
                         description: TTFT is the target Time to First Token SLA in
                           milliseconds.
                         type: number
-                    required:
-                    - itl
-                    - modelName
-                    - profiling
-                    - ttft
                     type: object
                 type: object
               pattern:

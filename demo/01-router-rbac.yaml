@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: sglang-router
+  namespace: demo
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: sglang-router-discovery
+  namespace: demo
+rules:
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: sglang-router-discovery
+  namespace: demo
+subjects:
+- kind: ServiceAccount
+  name: sglang-router
+  namespace: demo
+roleRef:
+  kind: Role
+  name: sglang-router-discovery
+  apiGroup: rbac.authorization.k8s.io

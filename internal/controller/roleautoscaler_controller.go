@@ -28,7 +28,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -46,13 +46,13 @@ const (
 	finalizerName = "inference-extension.rolebasedgroup.io/finalizer"
 
 	// Default planner image hardcoded in the operator.
-	defaultPlannerImage = "ghcr.io/rolebasedgroup/rbg-planner:latest"
+	defaultPlannerImage = "registry-cn-hangzhou.ack.aliyuncs.com/dev/rbg-role-autoscaler-planner:v0.0.1"
 
 	// Default profiler image hardcoded in the operator.
-	defaultProfilerImage = "ghcr.io/rolebasedgroup/rbg-profiler:latest"
+	defaultProfilerImage = "registry-cn-hangzhou.ack.aliyuncs.com/dev/rbg-role-autoscaler-profiler:v0.0.1"
 
 	// Default Prometheus endpoint (in-cluster).
-	defaultPrometheusEndpoint = "http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090"
+	defaultPrometheusEndpoint = "http://prometheus.demo.svc.cluster.local:9090"
 
 	// ClusterRole name shared by all planner instances.
 	plannerClusterRoleName = "rbg-planner-role"
@@ -189,7 +189,7 @@ func (r *AutoScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 // parsedSpec holds the parsed AutoScaler spec fields.
 type parsedSpec struct {
-	scalingInterval int
+	scalingInterval    int
 	prefillRoleName    string
 	decodeRoleName     string
 	prefillMinReplicas int32
@@ -299,6 +299,11 @@ func (r *AutoScalerReconciler) ensureRBAC(ctx context.Context, ras *unstructured
 				Resources: []string{"rolebasedgroupscalingadapters/scale"},
 				Verbs:     []string{"patch"},
 			},
+			{
+				APIGroups: []string{""},
+				Resources: []string{"configmaps"},
+				Verbs:     []string{"get", "list", "create", "update"},
+			},
 		},
 	}
 	if err := r.createIfNotExists(ctx, cr); err != nil {
@@ -310,7 +315,7 @@ func (r *AutoScalerReconciler) ensureRBAC(ctx context.Context, ras *unstructured
 		ObjectMeta: metav1.ObjectMeta{
 			Name: crbName,
 			Labels: map[string]string{
-				"app.kubernetes.io/managed-by":            "rbg-planner-operator",
+				"app.kubernetes.io/managed-by":                       "rbg-planner-operator",
 				"inference-extension.rolebasedgroup.io/as-name":      name,
 				"inference-extension.rolebasedgroup.io/as-namespace": namespace,
 			},
@@ -418,6 +423,9 @@ func (r *AutoScalerReconciler) createProfilingJob(ctx context.Context, ras *unst
 				Spec: corev1.PodSpec{
 					ServiceAccountName: saName,
 					RestartPolicy:      corev1.RestartPolicyNever,
+					ImagePullSecrets: []corev1.LocalObjectReference{
+						{Name: "acs-dev-acr"},
+					},
 					Containers: []corev1.Container{
 						{
 							Name:  "profiler",
@@ -477,11 +485,18 @@ func (r *AutoScalerReconciler) ensurePlannerDeployment(ctx context.Context, ras 
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: saName,
+					ImagePullSecrets: []corev1.LocalObjectReference{
+						{Name: "acs-dev-acr"},
+					},
 					Containers: []corev1.Container{
 						{
-							Name:  "planner",
-							Image: spec.plannerImage,
-							Env:   buildPlannerEnv(name, spec, namespace, maxGPUBudget, prefillGPUs, decodeGPUs),
+							Name:            "planner",
+							Image:           spec.plannerImage,
+							ImagePullPolicy: corev1.PullAlways,
+							Env:             buildPlannerEnv(name, spec, namespace, maxGPUBudget, prefillGPUs, decodeGPUs),
+							Ports: []corev1.ContainerPort{
+								{Name: "metrics", ContainerPort: int32(spec.metricsPort), Protocol: corev1.ProtocolTCP},
+							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
 									Name:      "profiling",
@@ -539,6 +554,8 @@ func buildPlannerEnv(rbgName string, spec *parsedSpec, namespace string, maxGPUB
 		{Name: "ADJUSTMENT_INTERVAL", Value: strconv.Itoa(spec.scalingInterval)},
 		{Name: "MAX_GPU_BUDGET", Value: strconv.Itoa(maxGPUBudget)},
 		{Name: "MIN_REPLICAS", Value: strconv.Itoa(int(spec.prefillMinReplicas))},
+		{Name: "MAX_PREFILL_REPLICAS", Value: strconv.Itoa(int(spec.prefillMaxReplicas))},
+		{Name: "MAX_DECODE_REPLICAS", Value: strconv.Itoa(int(spec.decodeMaxReplicas))},
 		{Name: "PREFILL_ENGINE_NUM_GPU", Value: strconv.Itoa(prefillGPUs)},
 		{Name: "DECODE_ENGINE_NUM_GPU", Value: strconv.Itoa(decodeGPUs)},
 		{Name: "TTFT_SLA", Value: fmt.Sprintf("%.1f", spec.ttft)},
