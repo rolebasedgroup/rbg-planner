@@ -20,8 +20,8 @@ from typing import Optional
 from prometheus_client import Gauge, start_http_server
 
 from rbg_planner.config import PlannerConfig
+from rbg_planner.metrics import create_metrics_adapter
 from rbg_planner.planner_connector import PlannerConnector, TargetReplica
-from rbg_planner.prometheus_client import PrometheusMetricsClient
 from rbg_planner.rbg_connector import RBGConnector
 from rbg_planner.utils.load_predictor import LOAD_PREDICTORS
 from rbg_planner.utils.perf_interpolation import DecodeInterpolator, PrefillInterpolator
@@ -157,10 +157,10 @@ class Planner:
                 decode_role_name=config.decode_role_name,
             )
 
-        # Prometheus client for querying inference metrics
-        self.metrics_client = PrometheusMetricsClient(
-            url=config.prometheus_endpoint,
-            metric_source=config.metric_source,
+        # Metrics adapter for querying inference metrics
+        self.metrics_client = create_metrics_adapter(
+            source=config.metric_source,
+            prometheus_url=config.prometheus_endpoint,
         )
 
         # Load predictors
@@ -216,22 +216,22 @@ class Planner:
         interval = f"{self.config.adjustment_interval}s"
         model = self.config.model_name or None
 
-        # Prometheus returns seconds, convert to milliseconds for TTFT/ITL
+        # Adapter returns seconds, convert to milliseconds for TTFT/ITL
         self.last_metrics.ttft = (
-            self.metrics_client.get_avg_time_to_first_token(interval, model) * 1000
+            self.metrics_client.get_avg_ttft(interval, model) * 1000
         )
         self.last_metrics.itl = (
-            self.metrics_client.get_avg_inter_token_latency(interval, model) * 1000
+            self.metrics_client.get_avg_itl(interval, model) * 1000
         )
         self.last_metrics.num_req = self.metrics_client.get_request_count(interval, model)
         self.last_metrics.request_duration = (
             self.metrics_client.get_avg_request_duration(interval, model)
         )
         self.last_metrics.isl = (
-            self.metrics_client.get_avg_input_sequence_tokens(interval, model)
+            self.metrics_client.get_avg_isl(interval, model)
         )
         self.last_metrics.osl = (
-            self.metrics_client.get_avg_output_sequence_tokens(interval, model)
+            self.metrics_client.get_avg_osl(interval, model)
         )
 
         logger.info(

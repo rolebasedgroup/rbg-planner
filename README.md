@@ -30,6 +30,19 @@ The core planning algorithm, SLA profiling methodology, and performance interpol
 6. Planner engine runs in a loop: observe metrics -> predict load -> compute replicas -> scale via RBGSA
 7. Operator periodically updates status with current replica counts from the RBG
 
+### Metrics Adapter
+
+The planner uses a pluggable **Metrics Adapter** module to query Prometheus. Each inference engine exposes metrics in a different format -- the adapter normalizes them into a unified interface so the scaling logic is engine-agnostic.
+
+| Adapter | Engine | Differences |
+|---------|--------|-------------|
+| `SGLangAdapter` | SGLang | ISL/OSL from counter ratios, label `model_name` |
+| `VLLMAdapter` | vLLM | ISL/OSL from counter ratios, label `model_name` |
+| `DynamoAdapter` | NVIDIA Dynamo | ISL/OSL from histograms, label `model` |
+| `PatioAdapter` | Patio | ISL/OSL from counter ratios, label `model_name` |
+
+Configured via `metricsEndpoint.metricSource` in the AutoScaler CR. To add a new engine, implement `MetricsAdapter` in `python/planner/rbg_planner/metrics/` and register it in `ADAPTERS`.
+
 ### Lifecycle
 
 ![Lifecycle](docs/images/lifecycle.png)
@@ -249,6 +262,7 @@ rbg-planner/
 ├── python/
 │   ├── planner/                   # Planner engine (Python)
 │   │   ├── rbg_planner/           # Core planner package
+│   │   │   └── metrics/           # Pluggable metrics adapters
 │   │   ├── tests/                 # Planner tests
 │   │   ├── Dockerfile             # Planner image
 │   │   └── pyproject.toml
