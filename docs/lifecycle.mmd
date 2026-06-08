@@ -1,9 +1,10 @@
-stateDiagram-v2
-    [*] --> Pending: AutoScaler CR created
-    Pending --> Pending: Waiting for RBG
-    Pending --> Initializing: RBG found, RBAC created
-    Initializing --> Initializing: Profiling Job running
-    Initializing --> Ready: Profiling done, Planner deployed
-    Ready --> Ready: Planner scaling loop active
-    Pending --> Failed: Invalid spec
-    Initializing --> Failed: Profiling failed
+flowchart LR
+    A["Pending"] -->|"RBG found<br/>RBAC created"| B["Initializing"]
+    B -->|"Profiling done<br/>Planner deployed"| C["Ready"]
+    A -->|"Invalid spec"| D["Failed"]
+    B -->|"Profiling failed"| D
+
+    style A fill:#F5A623,stroke:#D4891A,color:#fff
+    style B fill:#7B68EE,stroke:#5B48CE,color:#fff
+    style C fill:#50C878,stroke:#3AA85E,color:#fff
+    style D fill:#E6522C,stroke:#C4411E,color:#fff
