@@ -10,41 +10,7 @@ The core planning algorithm, SLA profiling methodology, and performance interpol
 
 ## Architecture
 
-```
-                          ┌──────────────────────┐
-                          │    Prometheus         │
-                          └──────────┬────────────┘
-                                     │ query metrics
-                                     │
-┌────────────────────────────────────┼──────────────────────────────────────────┐
-│ Kubernetes Cluster                 │                                          │
-│                                    │                                          │
-│  ┌──────────────────┐    ┌─────────▼──────────┐    ┌────────────────────┐    │
-│  │  AutoScaler  │    │  Planner Engine    │    │   RBG Controller   │    │
-│  │  Operator (Go)   │───►│  (Python, managed  │───►│                    │    │
-│  │                  │    │   as Deployment)   │    │  scales pods via   │    │
-│  │  1. Validate RBG │    │                    │    │  StatefulSets/     │    │
-│  │  2. Create RBAC  │    │  1. Observe        │    │  Deployments       │    │
-│  │  3. Run Profiling│    │  2. Predict        │    │                    │    │
-│  │  4. Deploy Planner    │  3. Compute        │    └────────────────────┘    │
-│  │  5. Update Status│    │  4. Scale (RBGSA)  │                              │
-│  └──────────────────┘    └────────────────────┘                              │
-│          │                         ▲                                         │
-│          │ creates                 │ profiling data                           │
-│          ▼                         │                                         │
-│  ┌──────────────────┐    ┌─────────┴──────────┐                              │
-│  │  Profiling Job   │───►│ Profiling ConfigMap │                              │
-│  │  (Python)        │    └────────────────────┘                              │
-│  └──────────────────┘                                                        │
-│                                                                              │
-│  ┌────────┐  ┌────────┐                                                      │
-│  │Prefill │  │ Decode │     Target RoleBasedGroup                            │
-│  │ Role   │  │  Role  │     (same name as AutoScaler)                    │
-│  │(N GPU) │  │(M GPU) │                                                      │
-│  └────────┘  └────────┘                                                      │
-│                                                                              │
-└──────────────────────────────────────────────────────────────────────────────┘
-```
+![Architecture](docs/images/architecture.png)
 
 ### Components
 
@@ -61,23 +27,16 @@ The core planning algorithm, SLA profiling methodology, and performance interpol
 3. Operator creates a ServiceAccount, ClusterRole, and ClusterRoleBinding for the planner
 4. Operator runs a profiling Job to generate performance data (or uses existing ConfigMap)
 5. Operator deploys the planner engine as a Deployment with profiling data mounted
-6. Planner engine runs in a loop: observe metrics → predict load → compute replicas → scale via RBGSA
+6. Planner engine runs in a loop: observe metrics -> predict load -> compute replicas -> scale via RBGSA
 7. Operator periodically updates status with current replica counts from the RBG
 
-### State Machine
+### Lifecycle
 
-```
-AutoScaler Created
-        │
-        ▼
-    [Pending]  ──── validate RBG exists, create RBAC
-        │
-        ▼
-  [Initializing] ── run profiling Job, wait for completion
-        │
-        ▼
-     [Ready]  ──── planner Deployment running, scaling active
-```
+![Lifecycle](docs/images/lifecycle.png)
+
+### Planner Loop
+
+![Planner Loop](docs/images/planner-loop.png)
 
 ## Quick Start
 
@@ -265,10 +224,10 @@ The planner engine exposes Prometheus metrics at the configured port (default: `
 
 A pre-built Grafana dashboard is provided at `deploy/grafana-planner-dashboard.yaml` with four sections:
 
-1. **Worker Counts & GPU Usage** — Stat panels + history timeseries
-2. **Observed Metrics** — TTFT/ITL latency, request rate/duration, ISL/OSL
-3. **Predicted Metrics** — Predicted request rate, sequence lengths, replica counts
-4. **Correction Factors** — Gauge panels with threshold coloring + history
+1. **Worker Counts & GPU Usage** -- Stat panels + history timeseries
+2. **Observed Metrics** -- TTFT/ITL latency, request rate/duration, ISL/OSL
+3. **Predicted Metrics** -- Predicted request rate, sequence lengths, replica counts
+4. **Correction Factors** -- Gauge panels with threshold coloring + history
 
 The dashboard includes **Namespace** and **RBG Name** dropdown variables for filtering when running multiple planners.
 
@@ -297,6 +256,7 @@ rbg-planner/
 │       ├── rbg_profiler/          # Core profiler package
 │       ├── Dockerfile             # Profiler image
 │       └── pyproject.toml
+├── docs/                          # Architecture and flow diagrams
 ├── deploy/                        # Grafana dashboard
 ├── Dockerfile                     # Operator image (Go)
 ├── Makefile                       # Build targets

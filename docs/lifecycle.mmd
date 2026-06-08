@@ -1,0 +1,9 @@
+stateDiagram-v2
+    [*] --> Pending: AutoScaler CR created
+    Pending --> Pending: Waiting for RBG
+    Pending --> Initializing: RBG found, RBAC created
+    Initializing --> Initializing: Profiling Job running
+    Initializing --> Ready: Profiling done, Planner deployed
+    Ready --> Ready: Planner scaling loop active
+    Pending --> Failed: Invalid spec
+    Initializing --> Failed: Profiling failed

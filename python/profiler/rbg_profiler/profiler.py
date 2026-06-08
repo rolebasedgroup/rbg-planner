@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Profiling methodology adapted from dynamo/planner/offline for RoleBasedGroup.
+
 """SLA Profiler for PD-disaggregated inference.
 
 Profiles prefill and decode engines through the frontend endpoint using

@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Ported from dynamo/planner/utils/load_predictor.py for RoleBasedGroup.
+
 """Load predictors for forecasting request patterns.
 
 Ported from dynamo/components/src/dynamo/planner/utils/load_predictor.py

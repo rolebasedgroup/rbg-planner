@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Ported from dynamo/planner/core and adapted for RoleBasedGroup.
+
 """Core SLA-based planner for RBG Prefill/Decode autoscaling.
 
 Ported from dynamo/planner/utils/planner_core.py.
