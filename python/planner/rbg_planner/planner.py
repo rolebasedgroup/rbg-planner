@@ -291,11 +291,12 @@ class Planner:
         Decode: based on ITL SLA target, corrected by observation vs prediction ratio.
         """
         # Prefill: compute required replicas based on token throughput
+        # correction_factor > 1 means actual TTFT > expected → need more replicas
         pred_prefill_throughput = (
             next_num_req
             * next_isl
             / self.config.adjustment_interval
-            * min(1, self.p_correction_factor)
+            * self.p_correction_factor
         )
         prefill_engine_cap = (
             self.prefill_interpolator.interpolate_thpt_per_gpu(next_isl)
@@ -333,9 +334,11 @@ class Planner:
             f"{decode_engine_cap:.2f}(engine_cap) = {next_num_d}(replicas)"
         )
 
-        # Enforce minimums
+        # Enforce min/max per role
         next_num_p = max(next_num_p, self.config.min_replicas)
+        next_num_p = min(next_num_p, self.config.max_prefill_replicas)
         next_num_d = max(next_num_d, self.config.min_replicas)
+        next_num_d = min(next_num_d, self.config.max_decode_replicas)
 
         # Enforce GPU budget
         total_gpu = (

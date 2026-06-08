@@ -99,13 +99,18 @@ type Implementation struct {
 // DynamoPlannerConfig defines configuration for the Dynamo planner engine.
 type DynamoPlannerConfig struct {
 	// ModelName is the model name used for Prometheus label filtering.
-	ModelName string `json:"modelName"`
+	// +optional
+	ModelName string `json:"modelName,omitempty"`
 
 	// TTFT is the target Time to First Token SLA in milliseconds.
-	TTFT float64 `json:"ttft"`
+	// +optional
+	// +kubebuilder:default=500
+	TTFT float64 `json:"ttft,omitempty"`
 
 	// ITL is the target Inter-Token Latency SLA in milliseconds.
-	ITL float64 `json:"itl"`
+	// +optional
+	// +kubebuilder:default=50
+	ITL float64 `json:"itl,omitempty"`
 
 	// LoadPredictor selects the load prediction algorithm.
 	// +optional
@@ -127,7 +132,8 @@ type DynamoPlannerConfig struct {
 	DryRun bool `json:"dryRun,omitempty"`
 
 	// Profiling configures automatic SLA profiling.
-	Profiling ProfilingConfig `json:"profiling"`
+	// +optional
+	Profiling *ProfilingConfig `json:"profiling,omitempty"`
 
 	// MetricsEndpoint configures the metrics collection endpoint.
 	// +optional

@@ -1,0 +1,14 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "rbg-planner.fullname" . }}
+  labels:
+    {{- include "rbg-planner.labels" . | nindent 4 }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "rbg-planner.serviceAccountName" . }}
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: ClusterRole
+  name: {{ include "rbg-planner.fullname" . }}
+  apiGroup: rbac.authorization.k8s.io

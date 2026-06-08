@@ -28,7 +28,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -68,8 +68,11 @@ var rbgGVR = schema.GroupVersionResource{Group: rbgGroup, Version: rbgVersion, R
 // AutoScalerReconciler reconciles an AutoScaler object.
 type AutoScalerReconciler struct {
 	client.Client
-	Scheme   *runtime.Scheme
-	Recorder record.EventRecorder
+	Scheme             *runtime.Scheme
+	Recorder           record.EventRecorder
+	PlannerImage       string
+	ProfilerImage      string
+	PrometheusEndpoint string
 }
 
 // +kubebuilder:rbac:groups=inference-extension.rolebasedgroup.io,resources=autoscalers,verbs=get;list;watch;create;update;patch;delete
@@ -99,7 +102,7 @@ func (r *AutoScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	// Parse spec from unstructured — we use typed access via helpers.
-	spec, err := parseRASSpec(ras)
+	spec, err := r.parseRASSpec(ras)
 	if err != nil {
 		logger.Error(err, "failed to parse AutoScaler spec")
 		return ctrl.Result{}, r.setPhase(ctx, ras, "Failed", "InvalidSpec", err.Error())
@@ -189,27 +192,28 @@ func (r *AutoScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 // parsedSpec holds the parsed AutoScaler spec fields.
 type parsedSpec struct {
-	scalingInterval int
-	prefillRoleName    string
-	decodeRoleName     string
-	prefillMinReplicas int32
-	prefillMaxReplicas int32
-	decodeMinReplicas  int32
-	decodeMaxReplicas  int32
-	plannerImage       string
-	modelName          string
-	ttft               float64
-	itl                float64
-	loadPredictor      string
-	predictionWindow   int
-	noCorrection       bool
-	dryRun             bool
-	profilingImage     string
-	metricSource       string
-	metricsPort        int
+	scalingInterval      int
+	prefillRoleName      string
+	decodeRoleName       string
+	prefillMinReplicas   int32
+	prefillMaxReplicas   int32
+	decodeMinReplicas    int32
+	decodeMaxReplicas    int32
+	plannerImage         string
+	modelName            string
+	ttft                 float64
+	itl                  float64
+	loadPredictor        string
+	predictionWindow     int
+	noCorrection         bool
+	dryRun               bool
+	profilingImage       string
+	metricSource         string
+	metricsPort          int
+	prometheusEndpoint   string
 }
 
-func parseRASSpec(ras *unstructured.Unstructured) (*parsedSpec, error) {
+func (r *AutoScalerReconciler) parseRASSpec(ras *unstructured.Unstructured) (*parsedSpec, error) {
 	spec, ok := ras.Object["spec"].(map[string]interface{})
 	if !ok {
 		return nil, fmt.Errorf("missing spec")
@@ -240,7 +244,10 @@ func parseRASSpec(ras *unstructured.Unstructured) (*parsedSpec, error) {
 	if dp == nil {
 		return nil, fmt.Errorf("implementation.DynamoPlanner is required")
 	}
-	s.plannerImage = defaultPlannerImage
+	s.plannerImage = r.PlannerImage
+	if s.plannerImage == "" {
+		s.plannerImage = defaultPlannerImage
+	}
 	s.modelName = getStrField(dp, "modelName", "")
 	s.ttft = getFloatField(dp, "ttft", 500.0)
 	s.itl = getFloatField(dp, "itl", 50.0)
@@ -251,12 +258,22 @@ func parseRASSpec(ras *unstructured.Unstructured) (*parsedSpec, error) {
 
 	// profiling
 	prof, _ := dp["profiling"].(map[string]interface{})
-	s.profilingImage = getStrField(prof, "image", defaultProfilerImage)
+	profilerDefault := r.ProfilerImage
+	if profilerDefault == "" {
+		profilerDefault = defaultProfilerImage
+	}
+	s.profilingImage = getStrField(prof, "image", profilerDefault)
 
 	// metricsEndpoint
 	me, _ := dp["metricsEndpoint"].(map[string]interface{})
 	s.metricSource = getStrField(me, "metricSource", "sglang")
 	s.metricsPort = getIntField(me, "port", 9091)
+
+	// prometheusEndpoint
+	s.prometheusEndpoint = r.PrometheusEndpoint
+	if s.prometheusEndpoint == "" {
+		s.prometheusEndpoint = defaultPrometheusEndpoint
+	}
 
 	return s, nil
 }
@@ -299,6 +316,11 @@ func (r *AutoScalerReconciler) ensureRBAC(ctx context.Context, ras *unstructured
 				Resources: []string{"rolebasedgroupscalingadapters/scale"},
 				Verbs:     []string{"patch"},
 			},
+			{
+				APIGroups: []string{""},
+				Resources: []string{"configmaps"},
+				Verbs:     []string{"get", "list", "create", "update"},
+			},
 		},
 	}
 	if err := r.createIfNotExists(ctx, cr); err != nil {
@@ -310,7 +332,7 @@ func (r *AutoScalerReconciler) ensureRBAC(ctx context.Context, ras *unstructured
 		ObjectMeta: metav1.ObjectMeta{
 			Name: crbName,
 			Labels: map[string]string{
-				"app.kubernetes.io/managed-by":            "rbg-planner-operator",
+				"app.kubernetes.io/managed-by":                       "rbg-planner-operator",
 				"inference-extension.rolebasedgroup.io/as-name":      name,
 				"inference-extension.rolebasedgroup.io/as-namespace": namespace,
 			},
@@ -481,7 +503,10 @@ func (r *AutoScalerReconciler) ensurePlannerDeployment(ctx context.Context, ras 
 						{
 							Name:  "planner",
 							Image: spec.plannerImage,
-							Env:   buildPlannerEnv(name, spec, namespace, maxGPUBudget, prefillGPUs, decodeGPUs),
+							Env:             buildPlannerEnv(name, spec, namespace, maxGPUBudget, prefillGPUs, decodeGPUs),
+							Ports: []corev1.ContainerPort{
+								{Name: "metrics", ContainerPort: int32(spec.metricsPort), Protocol: corev1.ProtocolTCP},
+							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
 									Name:      "profiling",
@@ -533,12 +558,14 @@ func buildPlannerEnv(rbgName string, spec *parsedSpec, namespace string, maxGPUB
 		{Name: "RBG_NAMESPACE", Value: namespace},
 		{Name: "PREFILL_ROLE_NAME", Value: spec.prefillRoleName},
 		{Name: "DECODE_ROLE_NAME", Value: spec.decodeRoleName},
-		{Name: "PROMETHEUS_ENDPOINT", Value: defaultPrometheusEndpoint},
+		{Name: "PROMETHEUS_ENDPOINT", Value: spec.prometheusEndpoint},
 		{Name: "METRIC_SOURCE", Value: spec.metricSource},
 		{Name: "MODEL_NAME", Value: spec.modelName},
 		{Name: "ADJUSTMENT_INTERVAL", Value: strconv.Itoa(spec.scalingInterval)},
 		{Name: "MAX_GPU_BUDGET", Value: strconv.Itoa(maxGPUBudget)},
 		{Name: "MIN_REPLICAS", Value: strconv.Itoa(int(spec.prefillMinReplicas))},
+		{Name: "MAX_PREFILL_REPLICAS", Value: strconv.Itoa(int(spec.prefillMaxReplicas))},
+		{Name: "MAX_DECODE_REPLICAS", Value: strconv.Itoa(int(spec.decodeMaxReplicas))},
 		{Name: "PREFILL_ENGINE_NUM_GPU", Value: strconv.Itoa(prefillGPUs)},
 		{Name: "DECODE_ENGINE_NUM_GPU", Value: strconv.Itoa(decodeGPUs)},
 		{Name: "TTFT_SLA", Value: fmt.Sprintf("%.1f", spec.ttft)},

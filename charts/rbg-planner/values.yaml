@@ -1,0 +1,46 @@
+replicaCount: 1
+
+# Operator image
+image:
+  repository: ghcr.io/rolebasedgroup/rbg-planner-operator
+  tag: latest
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+serviceAccount:
+  create: true
+  name: rbg-planner-operator
+
+# Planner image (deployed per AutoScaler CR)
+planner:
+  image: ghcr.io/rolebasedgroup/rbg-planner:latest
+
+# Profiler image (Job created per AutoScaler CR)
+profiler:
+  image: ghcr.io/rolebasedgroup/rbg-profiler:latest
+
+# Prometheus endpoint for planner metrics collection
+prometheus:
+  endpoint: http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 128Mi
+  requests:
+    cpu: 100m
+    memory: 64Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+leaderElection:
+  enabled: true
+
+metrics:
+  port: 8080
+
+healthProbe:
+  port: 8081
