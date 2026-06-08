@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Profiling methodology adapted from dynamo/planner/offline for RoleBasedGroup.
+
 """RBG Profiler - SLA profiling tool for PD-disaggregated inference.
 
 Runs benchmarks against inference engines at various configurations

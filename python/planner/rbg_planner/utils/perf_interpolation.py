@@ -1,3 +1,8 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Ported from dynamo/planner/utils/perf_interpolation.py for RoleBasedGroup.
+
 """Performance interpolation for profiling data.
 
 Ported from dynamo/components/src/dynamo/planner/utils/perf_interpolation.py
