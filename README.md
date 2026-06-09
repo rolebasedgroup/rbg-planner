@@ -59,23 +59,34 @@ Configured via `metricsEndpoint.metricSource` in the AutoScaler CR. To add a new
 - `kubectl` configured to access the cluster
 - Prometheus monitoring stack deployed
 
-### Step 1: Install the CRD
+### Install with Helm
 
 ```bash
-kubectl apply -f config/crd/inference-extension.rolebasedgroup.io_autoscalers.yaml
+helm install rbg-planner ./charts/rbg-planner -n rbg-system --create-namespace
 ```
 
-### Step 2: Deploy the Operator
+Override defaults as needed:
 
 ```bash
-# Build and push the operator image (or use a pre-built image)
-make docker-build OPERATOR_IMG=<your-registry>/rbg-planner-operator:latest
-docker push <your-registry>/rbg-planner-operator:latest
-
-# Deploy the operator (apply your own manager Deployment manifest)
+helm install rbg-planner ./charts/rbg-planner -n rbg-system --create-namespace \
+  --set image.repository=<your-registry>/rbg-planner-operator \
+  --set image.tag=v0.1.0 \
+  --set planner.image=<your-registry>/rbg-planner:v0.1.0 \
+  --set profiler.image=<your-registry>/rbg-profiler:v0.1.0 \
+  --set prometheus.endpoint=http://prometheus.monitoring.svc:9090
 ```
 
-### Step 3: Create an AutoScaler
+Key configurable values (`charts/rbg-planner/values.yaml`):
+
+| Value | Default | Description |
+|-------|---------|-------------|
+| `image.repository` | `ghcr.io/rolebasedgroup/rbg-planner-operator` | Operator image |
+| `planner.image` | `ghcr.io/rolebasedgroup/rbg-planner:latest` | Planner image (deployed per CR) |
+| `profiler.image` | `ghcr.io/rolebasedgroup/rbg-profiler:latest` | Profiler image (Job per CR) |
+| `prometheus.endpoint` | `http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090` | Prometheus URL |
+| `leaderElection.enabled` | `true` | Enable leader election for HA |
+
+### Create an AutoScaler
 
 Ensure you have a RoleBasedGroup already deployed (e.g., `sglang-pd-inference`), then create an `AutoScaler` with the **same name**:
 
@@ -270,6 +281,7 @@ rbg-planner/
 │       ├── rbg_profiler/          # Core profiler package
 │       ├── Dockerfile             # Profiler image
 │       └── pyproject.toml
+├── charts/rbg-planner/            # Helm chart for operator deployment
 ├── docs/                          # Architecture and flow diagrams
 ├── deploy/                        # Grafana dashboard
 ├── Dockerfile                     # Operator image (Go)
