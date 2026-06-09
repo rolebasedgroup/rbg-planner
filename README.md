@@ -8,6 +8,7 @@ RBG Planner works with **any inference engine** (SGLang, vLLM, NVIDIA Dynamo, ..
 
 - **Engine-agnostic**: Pluggable Metrics Adapter supports SGLang, vLLM, Dynamo, and any Prometheus-compatible metric source
 - **Framework-independent**: Connector interface decouples scaling logic from the orchestration layer
+- **Extensible scaling engine**: The `Implementation` union in the CRD supports multiple scaling engines -- `DynamoPlanner` ships built-in, and new engines can be added without modifying the core operator
 - **SLA-driven**: Scales based on TTFT/ITL latency targets, not just resource utilization
 - **Proactive**: ARIMA-based load prediction scales ahead of demand
 - **Self-profiling**: Automatic benchmarking generates per-model performance curves for optimal replica calculation
@@ -55,6 +56,25 @@ The planner uses a pluggable **Metrics Adapter** module to query Prometheus. Eac
 | `PatioAdapter` | Patio | ISL/OSL from counter ratios, label `model_name` |
 
 Configured via `metricsEndpoint.metricSource` in the AutoScaler CR. To add a new engine, implement `MetricsAdapter` in `python/planner/rbg_planner/metrics/` and register it in `ADAPTERS`.
+
+### Extensible Scaling Engine
+
+The CRD `spec.implementation` is a discriminated union -- each field represents a distinct scaling engine:
+
+```yaml
+spec:
+  implementation:
+    DynamoPlanner: { ... }    # Built-in: SLA-driven planner from NVIDIA Dynamo
+    # YourScaler: { ... }     # Add your own scaling engine here
+```
+
+`DynamoPlanner` is the built-in engine that ships with this project. To add a new scaling engine:
+
+1. Define a new config struct in `api/v1alpha1/roleautoscaler_types.go` and add it to the `Implementation` union
+2. Implement the engine's reconcile logic in the operator (profiling, deployment, scaling)
+3. The operator dispatches to the correct engine based on which field is set
+
+This design allows the same operator and CRD to support fundamentally different scaling strategies (e.g., rule-based, ML-based, external controller) without modifying the core framework.
 
 ### Lifecycle
 
