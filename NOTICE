@@ -1,0 +1,16 @@
+RBG Planner
+Copyright 2025 The RBG Authors.
+
+This product includes software derived from NVIDIA Dynamo
+(https://github.com/ai-dynamo/dynamo), licensed under the Apache License 2.0.
+Copyright (c) 2025-2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+
+Specifically, the following components are ported or adapted from Dynamo:
+- Planner scaling logic (python/planner/rbg_planner/planner.py)
+- Performance interpolation (python/planner/rbg_planner/utils/perf_interpolation.py)
+- Load predictors (python/planner/rbg_planner/utils/load_predictor.py)
+- Metrics collection (python/planner/rbg_planner/metrics/)
+- Planner connector interface (python/planner/rbg_planner/planner_connector.py)
+- Kubernetes connector (python/planner/rbg_planner/rbg_connector.py)
+- Planner configuration (python/planner/rbg_planner/config.py)
+- Profiling methodology (python/profiler/rbg_profiler/)
