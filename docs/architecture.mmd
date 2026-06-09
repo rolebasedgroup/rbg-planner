@@ -12,11 +12,17 @@ graph TB
         Operator -->|"creates"| SA["ServiceAccount<br/>ClusterRole<br/>ClusterRoleBinding"]
         Operator -->|"creates"| PJ["Profiling Job<br/>(Python)"]
         PJ -->|"writes"| CM["Profiling<br/>ConfigMap"]
-        Operator -->|"creates"| Planner["Planner Engine<br/>(Python Deployment)"]
+        Operator -->|"creates"| PlannerDep
 
-        CM -->|"mounted"| Planner
-        Prometheus["Prometheus"] -->|"query metrics"| Planner
-        Planner -->|"scale via RBGSA"| RBG
+        subgraph PlannerDep["Planner Engine (Python Deployment)"]
+            Adapter["Metrics Adapter<br/>(sglang / vllm / dynamo)"]
+            Core["Scaling Logic<br/>(predict &rarr; interpolate &rarr; scale)"]
+            Adapter --> Core
+        end
+
+        CM -->|"mounted"| PlannerDep
+        Prometheus["Prometheus"] -->|"PromQL"| Adapter
+        Core -->|"scale via RBGSA"| RBG
 
         subgraph RBG["RoleBasedGroup"]
             Prefill["Prefill Role<br/>(N replicas)"]
@@ -25,7 +31,9 @@ graph TB
     end
 
     style Operator fill:#4A90D9,stroke:#2C5F8A,color:#fff
-    style Planner fill:#7B68EE,stroke:#5B48CE,color:#fff
+    style PlannerDep fill:#7B68EE,stroke:#5B48CE,color:#fff
+    style Adapter fill:#9B59B6,stroke:#7D3C98,color:#fff
+    style Core fill:#5DADE2,stroke:#2E86C1,color:#fff
     style PJ fill:#F5A623,stroke:#D4891A,color:#fff
     style CM fill:#50C878,stroke:#3AA85E,color:#fff
     style RBG fill:#E8E8E8,stroke:#999
