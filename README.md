@@ -1,8 +1,21 @@
 # RBG Planner
 
-Kubernetes CRD Operator for SLA-based autoscaling of [RoleBasedGroup](https://github.com/rolebasedgroup) Prefill/Decode disaggregated inference workloads.
+An engine-agnostic, framework-independent SLA-driven autoscaler for large model inference on Kubernetes.
 
-Users create an `AutoScaler` custom resource for an RBG, and the operator automatically manages profiling, deploys the planner engine, and scales prefill/decode roles to meet TTFT and ITL SLA targets.
+RBG Planner works with **any inference engine** (SGLang, vLLM, NVIDIA Dynamo, ...) and **any orchestration framework** (RoleBasedGroup, custom controllers, ...) through its pluggable metrics adapter and connector architecture. It observes real-time latency metrics, predicts future load, and makes proactive scaling decisions to meet TTFT and ITL SLA targets -- all without coupling to a specific inference runtime.
+
+### Key Features
+
+- **Engine-agnostic**: Pluggable Metrics Adapter supports SGLang, vLLM, Dynamo, and any Prometheus-compatible metric source
+- **Framework-independent**: Connector interface decouples scaling logic from the orchestration layer
+- **SLA-driven**: Scales based on TTFT/ITL latency targets, not just resource utilization
+- **Proactive**: ARIMA-based load prediction scales ahead of demand
+- **Self-profiling**: Automatic benchmarking generates per-model performance curves for optimal replica calculation
+- **PD-disaggregated**: First-class support for Prefill/Decode disaggregated inference patterns
+
+### How It Works
+
+Users create an `AutoScaler` custom resource targeting a [RoleBasedGroup](https://github.com/rolebasedgroup). The operator automatically runs SLA profiling, deploys the planner engine, and continuously scales prefill/decode roles to meet latency targets.
 
 ## Acknowledgements
 
