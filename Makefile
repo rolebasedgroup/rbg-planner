@@ -42,6 +42,14 @@ manifests: controller-gen ## Generate CRD manifests.
 	$(CONTROLLER_GEN) rbac:roleName=rbg-planner-operator paths=./internal/... output:rbac:dir=config/rbac
 	cp -f ./config/crd/inference-extension.rolebasedgroup.io_autoscalers.yaml ./charts/rbg-planner/crds/
 
+update-helm: manifests ## Sync generated manifests to Helm chart.
+	GOFLAGS=-mod=mod go run -modfile=hack/tools/yaml-processor/go.mod \
+	  sigs.k8s.io/kueue/hack/tools/yaml-processor \
+	  -zap-log-level=$(YAML_PROCESSOR_LOG_LEVEL) hack/processing-plan.yaml
+
+helm-lint: ## Lint the Helm chart.
+	helm lint charts/rbg-planner/ --set prometheus.endpoint=http://test:9090
+
 fmt: ## Run go fmt.
 	go fmt ./...
 
