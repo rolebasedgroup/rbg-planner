@@ -48,8 +48,13 @@ fmt: ## Run go fmt.
 vet: ## Run go vet.
 	go vet ./...
 
-lint: vet ## Run linters.
-	go vet ./...
+fmt-verify: ## Verify go fmt.
+	@files=$$(gofmt -l .); if [ -n "$$files" ]; then echo "Unformatted files:"; echo "$$files"; exit 1; fi
+
+ci-lint: golangci-lint ## Run golangci-lint.
+	$(GOLANGCI_LINT) run --timeout 15m0s
+
+lint: ci-lint ## Run linters.
 
 test: ## Run Go tests.
 	go test ./... -v

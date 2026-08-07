@@ -1,0 +1,15 @@
+version: "2"
+linters:
+  enable: [errcheck, govet, ineffassign, misspell, nilerr, staticcheck, unconvert, unparam]
+  exclusions:
+    generated: lax
+    presets: [comments, common-false-positives, legacy, std-error-handling]
+    paths: [bin, 'third_party$', 'builtin$', 'examples$']
+formatters:
+  enable: [goimports]
+  settings:
+    goimports:
+      local-prefixes: [github.com/rolebasedgroup/rbg-planner]
+  exclusions:
+    generated: lax
+    paths: [bin, 'third_party$', 'builtin$', 'examples$']
