@@ -54,6 +54,12 @@ fmt-verify: ## Verify go fmt.
 ci-lint: golangci-lint ## Run golangci-lint.
 	$(GOLANGCI_LINT) run --timeout 15m0s
 
+lint-python: ## Run Python linter (ruff).
+	cd python/planner && pip install -e ".[dev]" && ruff check . && ruff format --check .
+
+fmt-python: ## Format Python code (ruff).
+	cd python/planner && ruff format .
+
 lint: ci-lint ## Run linters.
 
 test: ## Run Go tests.
