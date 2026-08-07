@@ -60,13 +60,18 @@ lint-python: ## Run Python linter (ruff).
 fmt-python: ## Format Python code (ruff).
 	cd python/planner && ruff format .
 
-lint: ci-lint ## Run linters.
+lint: ci-lint lint-python ## Run all linters.
 
-test: ## Run Go tests.
-	go test ./... -v
+test-go: ## Run Go tests with coverage.
+	go test ./... -v -coverprofile=cover.out
 
-test-python: ## Run Python planner tests.
-	cd python/planner && pip install -e ".[dev]" && pytest tests/ -v
+test-python: ## Run Python planner tests with coverage.
+	cd python/planner && pip install -e ".[dev]" && pytest tests/ -v --cov=rbg_planner
+
+test: test-go test-python ## Run all tests.
+
+verify: manifests generate fmt-verify ci-lint lint-python update-helm helm-lint ## Verify no drift in generated artifacts.
+	git --no-pager diff --exit-code config api charts
 
 ##@ Build
 
