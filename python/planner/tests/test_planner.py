@@ -1,6 +1,5 @@
 """Unit tests for the core planner logic."""
 
-import math
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -33,8 +32,10 @@ def config():
 @pytest.fixture
 def mock_interpolators():
     """Patch interpolators to avoid needing real profiling data."""
-    with patch("rbg_planner.planner.PrefillInterpolator") as mock_pi, \
-         patch("rbg_planner.planner.DecodeInterpolator") as mock_di:
+    with (
+        patch("rbg_planner.planner.PrefillInterpolator") as mock_pi,
+        patch("rbg_planner.planner.DecodeInterpolator") as mock_di,
+    ):
         pi = MagicMock()
         pi.interpolate_thpt_per_gpu.return_value = 1000.0  # tokens/s/gpu
         pi.interpolate_ttft.return_value = 100.0  # ms
@@ -46,6 +47,13 @@ def mock_interpolators():
         mock_di.return_value = di
 
         yield pi, di
+
+
+@pytest.fixture
+def mock_connector():
+    """Patch RBGConnector to avoid needing kube config in CI."""
+    with patch("rbg_planner.planner.RBGConnector") as mock:
+        yield mock
 
 
 class TestMetrics:
@@ -146,7 +154,7 @@ class TestPlannerMakeAdjustments:
         await planner.make_adjustments()
 
     @pytest.mark.asyncio
-    async def test_applies_scaling(self, config, mock_interpolators):
+    async def test_applies_scaling(self, config, mock_interpolators, mock_connector):
         config.no_operation = False
         planner = Planner(config)
 
@@ -155,8 +163,12 @@ class TestPlannerMakeAdjustments:
         planner.connector.get_role_ready_replicas.return_value = 2
 
         planner.last_metrics = Metrics(
-            ttft=200.0, itl=30.0, num_req=500.0,
-            isl=512.0, osl=128.0, request_duration=2.0,
+            ttft=200.0,
+            itl=30.0,
+            num_req=500.0,
+            isl=512.0,
+            osl=128.0,
+            request_duration=2.0,
         )
         planner.num_req_predictor.add_data_point(500)
         planner.isl_predictor.add_data_point(512)

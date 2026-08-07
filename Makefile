@@ -78,7 +78,7 @@ test-python: ## Run Python planner tests with coverage.
 
 test: test-go test-python ## Run all tests.
 
-verify: manifests generate fmt-verify ci-lint lint-python update-helm helm-lint ## Verify no drift in generated artifacts.
+verify: manifests generate update-helm ## Verify no drift in generated artifacts.
 	git --no-pager diff --exit-code config api charts
 
 ##@ Build

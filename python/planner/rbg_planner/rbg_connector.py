@@ -150,9 +150,7 @@ class RBGConnector(PlannerConnector):
             body=patch,
             _content_type="application/json-patch+json",
         )
-        logger.info(
-            f"Patched RBG {self.rbg_name} role {role_name} to {replicas} replicas"
-        )
+        logger.info(f"Patched RBG {self.rbg_name} role {role_name} to {replicas} replicas")
 
     def _scale_role(self, role_name: str, replicas: int):
         """Scale a role: try RBGSA first, fall back to RBG patch."""
@@ -165,9 +163,7 @@ class RBGConnector(PlannerConnector):
 
         rbg = self._get_rbg()
         if not self.is_ready():
-            logger.warning(
-                f"RBG {self.rbg_name} is not ready, skipping this scaling"
-            )
+            logger.warning(f"RBG {self.rbg_name} is not ready, skipping this scaling")
             return
 
         for target in target_replicas:
@@ -175,14 +171,10 @@ class RBGConnector(PlannerConnector):
             role = self._get_role_from_rbg(rbg, target.role_name)
             current_replicas = role.get("replicas", 0)
             if current_replicas != target.desired_replicas:
-                logger.info(
-                    f"Scaling role {target.role_name}: {current_replicas} -> {target.desired_replicas}"
-                )
+                logger.info(f"Scaling role {target.role_name}: {current_replicas} -> {target.desired_replicas}")
                 self._scale_role(target.role_name, target.desired_replicas)
             else:
-                logger.info(
-                    f"Role {target.role_name} already at {target.desired_replicas} replicas"
-                )
+                logger.info(f"Role {target.role_name} already at {target.desired_replicas} replicas")
 
         if blocking:
             await self.wait_for_ready()
@@ -202,9 +194,7 @@ class RBGConnector(PlannerConnector):
             ready = next((c for c in conditions if c.get("type") == "Ready"), None)
             if ready and ready.get("status") == "True":
                 return
-            logger.info(
-                f"[{attempt + 1}/{max_attempts}] Waiting for RBG {self.rbg_name} to be ready"
-            )
+            logger.info(f"[{attempt + 1}/{max_attempts}] Waiting for RBG {self.rbg_name} to be ready")
         raise DeploymentNotReadyError(self.rbg_name)
 
     def get_role_ready_replicas(self, role_name: str) -> int:

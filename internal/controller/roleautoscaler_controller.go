@@ -63,8 +63,6 @@ const (
 	rbgPlural  = "rolebasedgroups"
 )
 
-var rbgGVR = schema.GroupVersionResource{Group: rbgGroup, Version: rbgVersion, Resource: rbgPlural}
-
 // AutoScalerReconciler reconciles an AutoScaler object.
 type AutoScalerReconciler struct {
 	client.Client
@@ -192,25 +190,25 @@ func (r *AutoScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 // parsedSpec holds the parsed AutoScaler spec fields.
 type parsedSpec struct {
-	scalingInterval      int
-	prefillRoleName      string
-	decodeRoleName       string
-	prefillMinReplicas   int32
-	prefillMaxReplicas   int32
-	decodeMinReplicas    int32
-	decodeMaxReplicas    int32
-	plannerImage         string
-	modelName            string
-	ttft                 float64
-	itl                  float64
-	loadPredictor        string
-	predictionWindow     int
-	noCorrection         bool
-	dryRun               bool
-	profilingImage       string
-	metricSource         string
-	metricsPort          int
-	prometheusEndpoint   string
+	scalingInterval    int
+	prefillRoleName    string
+	decodeRoleName     string
+	prefillMinReplicas int32
+	prefillMaxReplicas int32
+	decodeMinReplicas  int32
+	decodeMaxReplicas  int32
+	plannerImage       string
+	modelName          string
+	ttft               float64
+	itl                float64
+	loadPredictor      string
+	predictionWindow   int
+	noCorrection       bool
+	dryRun             bool
+	profilingImage     string
+	metricSource       string
+	metricsPort        int
+	prometheusEndpoint string
 }
 
 func (r *AutoScalerReconciler) parseRASSpec(ras *unstructured.Unstructured) (*parsedSpec, error) {
@@ -503,7 +501,7 @@ func (r *AutoScalerReconciler) ensurePlannerDeployment(ctx context.Context, ras 
 						{
 							Name:  "planner",
 							Image: spec.plannerImage,
-							Env:             buildPlannerEnv(name, spec, namespace, maxGPUBudget, prefillGPUs, decodeGPUs),
+							Env:   buildPlannerEnv(name, spec, namespace, maxGPUBudget, prefillGPUs, decodeGPUs),
 							Ports: []corev1.ContainerPort{
 								{Name: "metrics", ContainerPort: int32(spec.metricsPort), Protocol: corev1.ProtocolTCP},
 							},

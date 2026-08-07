@@ -40,8 +40,5 @@ def create_metrics_adapter(source: str, prometheus_url: str) -> MetricsAdapter:
     """
     adapter_cls = ADAPTERS.get(source)
     if adapter_cls is None:
-        raise ValueError(
-            f"Unsupported metric source: {source}. "
-            f"Supported: {list(ADAPTERS.keys())}"
-        )
+        raise ValueError(f"Unsupported metric source: {source}. Supported: {list(ADAPTERS.keys())}")
     return adapter_cls(url=prometheus_url)

@@ -25,8 +25,11 @@ def parse_args() -> argparse.Namespace:
     # Prometheus
     parser.add_argument("--prometheus-endpoint", type=str, default=None, help="Prometheus URL")
     parser.add_argument(
-        "--metric-source", type=str, default=None, choices=["sglang", "vllm", "patio"],
-        help="Metric source (sglang, vllm, patio)"
+        "--metric-source",
+        type=str,
+        default=None,
+        choices=["sglang", "vllm", "patio"],
+        help="Metric source (sglang, vllm, patio)",
     )
     parser.add_argument("--model-name", type=str, default=None, help="Model name for metric filtering")
 
@@ -39,8 +42,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--ttft-sla", type=float, default=None, help="TTFT SLA target in milliseconds")
     parser.add_argument("--itl-sla", type=float, default=None, help="ITL SLA target in milliseconds")
     parser.add_argument(
-        "--load-predictor", type=str, default=None, choices=["constant", "arima", "prophet"],
-        help="Load predictor type"
+        "--load-predictor", type=str, default=None, choices=["constant", "arima", "prophet"], help="Load predictor type"
     )
     parser.add_argument("--load-prediction-window-size", type=int, default=None, help="Predictor window size")
     parser.add_argument("--no-correction", action="store_true", default=None, help="Disable correction factors")
@@ -49,7 +51,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--profile-results-dir", type=str, default=None, help="Path to profiling data directory")
 
     # Metrics exposition
-    parser.add_argument("--planner-prometheus-port", type=int, default=None, help="Port for planner metrics (0 to disable)")
+    parser.add_argument(
+        "--planner-prometheus-port", type=int, default=None, help="Port for planner metrics (0 to disable)"
+    )
 
     # Operation mode
     parser.add_argument("--no-operation", action="store_true", default=None, help="Dry-run mode (no scaling applied)")
@@ -60,8 +64,13 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_config(args: argparse.Namespace) -> PlannerConfig:
-    """Build PlannerConfig from CLI args (override) + env vars (default)."""
+def build_config(args: argparse.Namespace) -> PlannerConfig:  # noqa: C901
+    """Build PlannerConfig from CLI args (override) + env vars (default).
+
+    Complexity is high because each config field is individually overridden from
+    CLI args when provided. This explicit one-field-at-a-time pattern is clearer
+    than a generic getattr/setattr loop and is intentionally kept readable.
+    """
     config = PlannerConfig()
 
     # CLI args override env vars

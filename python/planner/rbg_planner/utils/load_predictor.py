@@ -66,7 +66,7 @@ class ARIMAPredictor(BasePredictor):
     def add_data_point(self, value: float):
         super().add_data_point(value)
         if len(self.data_buffer) > self.window_size:
-            self.data_buffer = self.data_buffer[-self.window_size:]
+            self.data_buffer = self.data_buffer[-self.window_size :]
 
     def predict_next(self) -> float:
         if len(self.data_buffer) < self.minimum_data_points:
@@ -100,6 +100,7 @@ class ProphetPredictor(BasePredictor):
         self.data_buffer: list[dict] = []  # type: ignore
 
         from datetime import datetime
+
         self.start_date = datetime(2024, 1, 1)
 
     def add_data_point(self, value: float):
@@ -114,7 +115,7 @@ class ProphetPredictor(BasePredictor):
         self.curr_step += 1
 
         if len(self.data_buffer) > self.window_size:
-            self.data_buffer = self.data_buffer[-self.window_size:]
+            self.data_buffer = self.data_buffer[-self.window_size :]
 
     def get_last_value(self) -> float:
         if not self.data_buffer:

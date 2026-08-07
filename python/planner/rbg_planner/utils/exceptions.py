@@ -3,6 +3,7 @@
 
 class PlannerError(Exception):
     """Base exception for planner errors."""
+
     pass
 
 
@@ -10,18 +11,14 @@ class RBGNotFoundError(PlannerError):
     """Raised when the target RoleBasedGroup is not found."""
 
     def __init__(self, rbg_name: str, namespace: str):
-        super().__init__(
-            f"RoleBasedGroup '{rbg_name}' not found in namespace '{namespace}'"
-        )
+        super().__init__(f"RoleBasedGroup '{rbg_name}' not found in namespace '{namespace}'")
 
 
 class RoleNotFoundError(PlannerError):
     """Raised when a role is not found in the RBG."""
 
     def __init__(self, role_name: str, rbg_name: str):
-        super().__init__(
-            f"Role '{role_name}' not found in RoleBasedGroup '{rbg_name}'"
-        )
+        super().__init__(f"Role '{role_name}' not found in RoleBasedGroup '{rbg_name}'")
 
 
 class DeploymentNotReadyError(PlannerError):
