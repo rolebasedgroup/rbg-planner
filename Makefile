@@ -1,9 +1,31 @@
-.PHONY: build generate manifests test lint clean docker-build docker-build-planner docker-build-profiler
+.PHONY: build generate manifests test lint clean docker-build docker-build-planner docker-build-profiler controller-gen golangci-lint fmt-verify ci-lint lint-python fmt-python test-go test-python update-helm helm-lint verify
 
-CONTROLLER_GEN ?= $(shell which controller-gen 2>/dev/null || echo $(shell go env GOPATH)/bin/controller-gen)
+##@ Build Tools
+
+LOCALBIN ?= $(shell pwd)/bin
+CONTROLLER_TOOLS_VERSION ?= v0.21.0
+GOLANGCI_LINT_VERSION ?= v2.1.4
+YAML_PROCESSOR_LOG_LEVEL ?= info
+
+CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
+GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
+
 OPERATOR_IMG ?= rbg-planner-operator:latest
 PLANNER_IMG ?= rbg-planner:latest
 PROFILER_IMG ?= rbg-profiler:latest
+
+define go-install-tool
+@[ -f "$(1)" ] || { set -e; \
+mkdir -p $(LOCALBIN); \
+GOBIN=$(LOCALBIN) go install "$(2)"; \
+}
+endef
+
+controller-gen: ## Download controller-gen locally if necessary.
+	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_TOOLS_VERSION))
+
+golangci-lint: ## Download golangci-lint locally if necessary.
+	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION))
 
 ##@ General
 
@@ -12,12 +34,13 @@ help: ## Display this help.
 
 ##@ Development
 
-generate: ## Generate deepcopy methods.
+generate: controller-gen ## Generate deepcopy methods.
 	$(CONTROLLER_GEN) object paths=./api/...
 
-manifests: ## Generate CRD manifests.
+manifests: controller-gen ## Generate CRD manifests.
 	$(CONTROLLER_GEN) crd:allowDangerousTypes=true paths=./api/... output:crd:dir=config/crd
 	$(CONTROLLER_GEN) rbac:roleName=rbg-planner-operator paths=./internal/... output:rbac:dir=config/rbac
+	cp -f ./config/crd/inference-extension.rolebasedgroup.io_autoscalers.yaml ./charts/rbg-planner/crds/
 
 fmt: ## Run go fmt.
 	go fmt ./...
