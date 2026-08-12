@@ -313,6 +313,12 @@ type AutoScalerStatus struct {
 	// LastTransitionTime is the last time the phase transitioned.
 	// +optional
 	LastTransitionTime *metav1.Time `json:"lastTransitionTime,omitempty"`
+
+	// LastProfilingFailureGeneration records the spec generation at which
+	// profiling last failed. Used to gate retry: the controller retries
+	// profiling only when spec.generation has advanced past this value.
+	// +optional
+	LastProfilingFailureGeneration int64 `json:"lastProfilingFailureGeneration,omitempty"`
 }
 
 // +genclient

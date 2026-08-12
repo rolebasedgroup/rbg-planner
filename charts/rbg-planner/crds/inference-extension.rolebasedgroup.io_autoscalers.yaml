@@ -488,6 +488,13 @@ spec:
                 description: DecodeReplicas is the current decode replica count.
                 format: int32
                 type: integer
+              lastProfilingFailureGeneration:
+                description: |-
+                  LastProfilingFailureGeneration records the spec generation at which
+                  profiling last failed. Used to gate retry: the controller retries
+                  profiling only when spec.generation has advanced past this value.
+                format: int64
+                type: integer
               lastTransitionTime:
                 description: LastTransitionTime is the last time the phase transitioned.
                 format: date-time
