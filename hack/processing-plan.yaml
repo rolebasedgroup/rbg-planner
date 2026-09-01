@@ -1,0 +1,29 @@
+files:
+  - path: config/rbac/role.yaml
+    outputDir: charts/rbg-planner/templates/rbac
+    removeComments: true
+    continueOnError: true
+    operations:
+      # Drop any labels controller-gen may emit so we can replace them with the
+      # Helm labels helper. The source role.yaml currently has no labels, so
+      # this is a no-op guarded by continueOnError.
+      - type: DELETE
+        key: .metadata.labels
+      # Replace the static operator name with the Helm fullname helper. The
+      # value is a yq string-literal expression: the surrounding double quotes
+      # make yq treat it as a string and the inner \" become " after evaluation,
+      # yielding the literal Helm template expression.
+      - type: UPDATE
+        key: .metadata.name
+        value: '"{{ include \"rbg-planner.fullname\" . }}"'
+    postOperations:
+      # Insert the Helm labels block immediately below the metadata key, using
+      # the rbg-planner.labels helper. INSERT_TEXT is the only post-operation
+      # type the yaml-processor supports; raw {{ }} text cannot be set via yq
+      # UPDATE/APPEND because it would be parsed as a yq expression.
+      - type: INSERT_TEXT
+        key: .metadata
+        value: |
+          labels:
+          {{- include "rbg-planner.labels" . | nindent 4 }}
+        indentation: 2

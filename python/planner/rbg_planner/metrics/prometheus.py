@@ -11,7 +11,7 @@ methods where query patterns differ.
 """
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 from prometheus_api_client import PrometheusConnect
@@ -50,7 +50,9 @@ class PrometheusAdapter(MetricsAdapter):
     # ── shared query helpers ─────────────────────────────────────────
 
     def _build_label_filter(
-        self, model_name: Optional[str] = None, role: Optional[str] = None,
+        self,
+        model_name: Optional[str] = None,
+        role: Optional[str] = None,
     ) -> str:
         filters = []
         if model_name:
@@ -68,10 +70,7 @@ class PrometheusAdapter(MetricsAdapter):
     ) -> float:
         """Average of a histogram: increase(sum) / increase(count)."""
         lf = self._build_label_filter(model_name, role=role)
-        query = (
-            f"increase({metric_name}_sum{lf}[{interval}])"
-            f"/increase({metric_name}_count{lf}[{interval}])"
-        )
+        query = f"increase({metric_name}_sum{lf}[{interval}])/increase({metric_name}_count{lf}[{interval}])"
         return self._exec_avg(query, metric_name)
 
     def _query_increase(
@@ -107,10 +106,7 @@ class PrometheusAdapter(MetricsAdapter):
     ) -> float:
         """Ratio of two counter increases: increase(num) / increase(denom)."""
         lf = self._build_label_filter(model_name)
-        query = (
-            f"increase({numerator}{lf}[{interval}])"
-            f"/increase({denominator}{lf}[{interval}])"
-        )
+        query = f"increase({numerator}{lf}[{interval}])/increase({denominator}{lf}[{interval}])"
         return self._exec_avg(query, numerator)
 
     def _exec_avg(self, query: str, label: str) -> float:
@@ -145,11 +141,17 @@ class PrometheusAdapter(MetricsAdapter):
     def get_avg_isl(self, interval: str, model_name: Optional[str] = None) -> float:
         """Default: counter ratio prompt_tokens / requests_total."""
         return self._query_counter_ratio(
-            self.metrics.prompt_tokens, self.metrics.requests_total, interval, model_name,
+            self.metrics.prompt_tokens,
+            self.metrics.requests_total,
+            interval,
+            model_name,
         )
 
     def get_avg_osl(self, interval: str, model_name: Optional[str] = None) -> float:
         """Default: counter ratio generation_tokens / requests_total."""
         return self._query_counter_ratio(
-            self.metrics.generation_tokens, self.metrics.requests_total, interval, model_name,
+            self.metrics.generation_tokens,
+            self.metrics.requests_total,
+            interval,
+            model_name,
         )

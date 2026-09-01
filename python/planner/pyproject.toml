@@ -21,10 +21,20 @@ dependencies = [
 
 [project.optional-dependencies]
 prophet = ["prophet>=1.1.0", "pandas>=2.0.0"]
-dev = ["pytest>=7.0.0", "pytest-asyncio>=0.21.0", "pytest-mock>=3.10.0"]
+dev = ["pytest>=7.0.0", "pytest-asyncio>=0.21.0", "pytest-mock>=3.10.0", "pytest-cov>=4.0.0", "ruff>=0.6.0"]
 
 [project.scripts]
 rbg-planner = "rbg_planner.main:main"
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "C90"]
+
+[tool.ruff.format]
+quote-style = "double"
 
 [tool.setuptools.packages.find]
 include = ["rbg_planner*"]

@@ -27,9 +27,7 @@ class PrefillInterpolator:
     def __init__(self, profile_results_dir: Optional[str] = None, raw_data: Optional[dict] = None):
         if profile_results_dir:
             # Try NPZ first, then JSON (ConfigMap mount)
-            npz_fn = os.path.join(
-                profile_results_dir, "selected_prefill_interpolation", "raw_data.npz"
-            )
+            npz_fn = os.path.join(profile_results_dir, "selected_prefill_interpolation", "raw_data.npz")
             json_fn = os.path.join(profile_results_dir, "prefill_raw_data.json")
 
             if os.path.exists(npz_fn):
@@ -57,12 +55,8 @@ class PrefillInterpolator:
 
         import scipy.interpolate
 
-        self.ttft_interpolator = scipy.interpolate.interp1d(
-            self.prefill_isl, self.prefill_ttft, kind="cubic"
-        )
-        self.thpt_interpolator = scipy.interpolate.interp1d(
-            self.prefill_isl, self.prefill_thpt_per_gpu, kind="cubic"
-        )
+        self.ttft_interpolator = scipy.interpolate.interp1d(self.prefill_isl, self.prefill_ttft, kind="cubic")
+        self.thpt_interpolator = scipy.interpolate.interp1d(self.prefill_isl, self.prefill_thpt_per_gpu, kind="cubic")
 
     def interpolate_ttft(self, isl: float) -> float:
         isl = max(self.min_isl, min(isl, self.max_isl))
@@ -83,9 +77,7 @@ class DecodeInterpolator:
         raw_data: Optional[dict] = None,
     ):
         if profile_results_dir:
-            npz_fn = os.path.join(
-                profile_results_dir, "selected_decode_interpolation", "raw_data.npz"
-            )
+            npz_fn = os.path.join(profile_results_dir, "selected_decode_interpolation", "raw_data.npz")
             json_fn = os.path.join(profile_results_dir, "decode_raw_data.json")
 
             if os.path.exists(npz_fn):
@@ -179,9 +171,7 @@ class DecodeInterpolator:
         ix, iy = self.compute_idx(concurrency, context_length)
         return float(self.thpt_interpolator[iy, ix])
 
-    def find_best_throughput_per_gpu(
-        self, itl: float, context_length: float
-    ) -> tuple[float, float, float]:
+    def find_best_throughput_per_gpu(self, itl: float, context_length: float) -> tuple[float, float, float]:
         """Find max throughput/gpu that achieves ITL <= target."""
         iy = int(
             np.clip(

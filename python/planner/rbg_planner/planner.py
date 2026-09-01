@@ -65,31 +65,38 @@ class PlannerPrometheusMetrics:
         self._labels = {"namespace": namespace, "rbg_name": rbg_name}
 
         self.num_p_workers = Gauge(
-            f"{prefix}_num_prefill_workers", "Number of prefill workers",
+            f"{prefix}_num_prefill_workers",
+            "Number of prefill workers",
             self.LABEL_NAMES,
         )
         self.num_d_workers = Gauge(
-            f"{prefix}_num_decode_workers", "Number of decode workers",
+            f"{prefix}_num_decode_workers",
+            "Number of decode workers",
             self.LABEL_NAMES,
         )
         self.observed_ttft = Gauge(
-            f"{prefix}_observed_ttft_ms", "Observed time to first token (ms)",
+            f"{prefix}_observed_ttft_ms",
+            "Observed time to first token (ms)",
             self.LABEL_NAMES,
         )
         self.observed_itl = Gauge(
-            f"{prefix}_observed_itl_ms", "Observed inter-token latency (ms)",
+            f"{prefix}_observed_itl_ms",
+            "Observed inter-token latency (ms)",
             self.LABEL_NAMES,
         )
         self.observed_request_rate = Gauge(
-            f"{prefix}_observed_request_rate", "Observed request rate (req/s)",
+            f"{prefix}_observed_request_rate",
+            "Observed request rate (req/s)",
             self.LABEL_NAMES,
         )
         self.observed_isl = Gauge(
-            f"{prefix}_observed_isl", "Observed input sequence length",
+            f"{prefix}_observed_isl",
+            "Observed input sequence length",
             self.LABEL_NAMES,
         )
         self.observed_osl = Gauge(
-            f"{prefix}_observed_osl", "Observed output sequence length",
+            f"{prefix}_observed_osl",
+            "Observed output sequence length",
             self.LABEL_NAMES,
         )
         self.observed_request_duration = Gauge(
@@ -98,35 +105,43 @@ class PlannerPrometheusMetrics:
             self.LABEL_NAMES,
         )
         self.p_correction_factor = Gauge(
-            f"{prefix}_p_correction_factor", "Prefill correction factor",
+            f"{prefix}_p_correction_factor",
+            "Prefill correction factor",
             self.LABEL_NAMES,
         )
         self.d_correction_factor = Gauge(
-            f"{prefix}_d_correction_factor", "Decode correction factor",
+            f"{prefix}_d_correction_factor",
+            "Decode correction factor",
             self.LABEL_NAMES,
         )
         self.predicted_request_rate = Gauge(
-            f"{prefix}_predicted_request_rate", "Predicted request rate (req/s)",
+            f"{prefix}_predicted_request_rate",
+            "Predicted request rate (req/s)",
             self.LABEL_NAMES,
         )
         self.predicted_isl = Gauge(
-            f"{prefix}_predicted_isl", "Predicted input sequence length",
+            f"{prefix}_predicted_isl",
+            "Predicted input sequence length",
             self.LABEL_NAMES,
         )
         self.predicted_osl = Gauge(
-            f"{prefix}_predicted_osl", "Predicted output sequence length",
+            f"{prefix}_predicted_osl",
+            "Predicted output sequence length",
             self.LABEL_NAMES,
         )
         self.predicted_num_p = Gauge(
-            f"{prefix}_predicted_num_prefill", "Predicted number of prefill replicas",
+            f"{prefix}_predicted_num_prefill",
+            "Predicted number of prefill replicas",
             self.LABEL_NAMES,
         )
         self.predicted_num_d = Gauge(
-            f"{prefix}_predicted_num_decode", "Predicted number of decode replicas",
+            f"{prefix}_predicted_num_decode",
+            "Predicted number of decode replicas",
             self.LABEL_NAMES,
         )
         self.gpu_hours = Gauge(
-            f"{prefix}_gpu_hours_total", "Cumulative GPU hours used",
+            f"{prefix}_gpu_hours_total",
+            "Cumulative GPU hours used",
             self.LABEL_NAMES,
         )
 
@@ -195,9 +210,7 @@ class Planner:
                     namespace=config.rbg_namespace,
                     rbg_name=config.rbg_name,
                 )
-                logger.info(
-                    f"Started planner metrics server on port {config.planner_prometheus_port}"
-                )
+                logger.info(f"Started planner metrics server on port {config.planner_prometheus_port}")
             except Exception as e:
                 logger.error(f"Failed to start planner metrics server: {e}")
 
@@ -217,30 +230,18 @@ class Planner:
         model = self.config.model_name or None
 
         # Adapter returns seconds, convert to milliseconds for TTFT/ITL
-        self.last_metrics.ttft = (
-            self.metrics_client.get_avg_ttft(interval, model) * 1000
-        )
-        self.last_metrics.itl = (
-            self.metrics_client.get_avg_itl(interval, model) * 1000
-        )
+        self.last_metrics.ttft = self.metrics_client.get_avg_ttft(interval, model) * 1000
+        self.last_metrics.itl = self.metrics_client.get_avg_itl(interval, model) * 1000
         self.last_metrics.num_req = self.metrics_client.get_request_count(interval, model)
-        self.last_metrics.request_duration = (
-            self.metrics_client.get_avg_request_duration(interval, model)
-        )
-        self.last_metrics.isl = (
-            self.metrics_client.get_avg_isl(interval, model)
-        )
-        self.last_metrics.osl = (
-            self.metrics_client.get_avg_osl(interval, model)
-        )
+        self.last_metrics.request_duration = self.metrics_client.get_avg_request_duration(interval, model)
+        self.last_metrics.isl = self.metrics_client.get_avg_isl(interval, model)
+        self.last_metrics.osl = self.metrics_client.get_avg_osl(interval, model)
 
         logger.info(
             f"Observed: num_req={self.last_metrics.num_req:.2f} "
             f"isl={self.last_metrics.isl:.2f} osl={self.last_metrics.osl:.2f}"
         )
-        logger.info(
-            f"Observed: ttft={self.last_metrics.ttft:.2f}ms itl={self.last_metrics.itl:.2f}ms"
-        )
+        logger.info(f"Observed: ttft={self.last_metrics.ttft:.2f}ms itl={self.last_metrics.itl:.2f}ms")
 
         # Feed predictors
         self.num_req_predictor.add_data_point(self.last_metrics.num_req)
@@ -254,19 +255,14 @@ class Planner:
             m.set(m.num_d_workers, num_d)
             m.set(m.observed_ttft, self.last_metrics.ttft)
             m.set(m.observed_itl, self.last_metrics.itl)
-            m.set(m.observed_request_rate,
-                  self.last_metrics.num_req / self.config.adjustment_interval)
+            m.set(m.observed_request_rate, self.last_metrics.num_req / self.config.adjustment_interval)
             m.set(m.observed_isl, self.last_metrics.isl)
             m.set(m.observed_osl, self.last_metrics.osl)
-            m.set(m.observed_request_duration,
-                  self.last_metrics.request_duration or 0)
+            m.set(m.observed_request_duration, self.last_metrics.request_duration or 0)
 
             # Track GPU hours
             interval_gpu_hours = (
-                (
-                    num_p * self.config.prefill_engine_num_gpu
-                    + num_d * self.config.decode_engine_num_gpu
-                )
+                (num_p * self.config.prefill_engine_num_gpu + num_d * self.config.decode_engine_num_gpu)
                 * self.config.adjustment_interval
                 / 3600
             )
@@ -279,17 +275,13 @@ class Planner:
             next_num_req = self.num_req_predictor.predict_next()
             next_isl = self.isl_predictor.predict_next()
             next_osl = self.osl_predictor.predict_next()
-            logger.info(
-                f"Predicted: num_req={next_num_req:.2f} isl={next_isl:.2f} osl={next_osl:.2f}"
-            )
+            logger.info(f"Predicted: num_req={next_num_req:.2f} isl={next_isl:.2f} osl={next_osl:.2f}")
             return next_num_req, next_isl, next_osl
         except Exception as e:
             logger.error(f"Failed to predict load: {e}")
             return None, None, None
 
-    def _compute_replica_requirements(
-        self, next_num_req: float, next_isl: float, next_osl: float
-    ) -> tuple[int, int]:
+    def _compute_replica_requirements(self, next_num_req: float, next_isl: float, next_osl: float) -> tuple[int, int]:
         """Compute the number of prefill and decode replicas needed.
 
         Prefill: based on predicted token throughput vs profiled throughput/gpu.
@@ -297,15 +289,9 @@ class Planner:
         """
         # Prefill: compute required replicas based on token throughput
         # correction_factor > 1 means actual TTFT > expected → need more replicas
-        pred_prefill_throughput = (
-            next_num_req
-            * next_isl
-            / self.config.adjustment_interval
-            * self.p_correction_factor
-        )
+        pred_prefill_throughput = next_num_req * next_isl / self.config.adjustment_interval * self.p_correction_factor
         prefill_engine_cap = (
-            self.prefill_interpolator.interpolate_thpt_per_gpu(next_isl)
-            * self.config.prefill_engine_num_gpu
+            self.prefill_interpolator.interpolate_thpt_per_gpu(next_isl) * self.config.prefill_engine_num_gpu
         )
         next_num_p = math.ceil(pred_prefill_throughput / prefill_engine_cap)
 
@@ -316,21 +302,15 @@ class Planner:
 
         # Decode: find throughput/gpu that achieves ITL <= corrected SLA
         if self.d_correction_factor <= 0:
-            logger.warning(
-                f"d_correction_factor={self.d_correction_factor}, using 1.0"
-            )
+            logger.warning(f"d_correction_factor={self.d_correction_factor}, using 1.0")
             corrected_itl = self.config.itl_sla
         else:
             corrected_itl = self.config.itl_sla / self.d_correction_factor
 
-        pred_decode_thpt_per_gpu, _, _ = (
-            self.decode_interpolator.find_best_throughput_per_gpu(
-                itl=corrected_itl, context_length=next_isl + next_osl / 2
-            )
+        pred_decode_thpt_per_gpu, _, _ = self.decode_interpolator.find_best_throughput_per_gpu(
+            itl=corrected_itl, context_length=next_isl + next_osl / 2
         )
-        pred_decode_throughput = (
-            next_num_req * next_osl / self.config.adjustment_interval
-        )
+        pred_decode_throughput = next_num_req * next_osl / self.config.adjustment_interval
         decode_engine_cap = pred_decode_thpt_per_gpu * self.config.decode_engine_num_gpu
         next_num_d = math.ceil(pred_decode_throughput / decode_engine_cap)
 
@@ -346,20 +326,14 @@ class Planner:
         next_num_d = min(next_num_d, self.config.max_decode_replicas)
 
         # Enforce GPU budget
-        total_gpu = (
-            next_num_p * self.config.prefill_engine_num_gpu
-            + next_num_d * self.config.decode_engine_num_gpu
-        )
+        total_gpu = next_num_p * self.config.prefill_engine_num_gpu + next_num_d * self.config.decode_engine_num_gpu
         if total_gpu > self.config.max_gpu_budget:
             scale = self.config.max_gpu_budget / total_gpu
             next_num_p = max(self.config.min_replicas, round(next_num_p * scale))
             next_num_d = max(
                 self.config.min_replicas,
                 round(
-                    (
-                        self.config.max_gpu_budget
-                        - next_num_p * self.config.prefill_engine_num_gpu
-                    )
+                    (self.config.max_gpu_budget - next_num_p * self.config.prefill_engine_num_gpu)
                     / self.config.decode_engine_num_gpu
                 ),
             )
@@ -385,22 +359,14 @@ class Planner:
 
         # ITL correction: actual / expected
         concurrency = (
-            self.last_metrics.num_req
-            / num_d
-            * self.last_metrics.request_duration
-            / self.config.adjustment_interval
+            self.last_metrics.num_req / num_d * self.last_metrics.request_duration / self.config.adjustment_interval
         )
         context_length = self.last_metrics.isl + self.last_metrics.osl / 2
-        expect_itl = self.decode_interpolator.interpolate_itl(
-            concurrency=concurrency, context_length=context_length
-        )
+        expect_itl = self.decode_interpolator.interpolate_itl(concurrency=concurrency, context_length=context_length)
         if expect_itl > 0:
             self.d_correction_factor = self.last_metrics.itl / expect_itl
 
-        logger.info(
-            f"Correction factors: TTFT={self.p_correction_factor:.3f}, "
-            f"ITL={self.d_correction_factor:.3f}"
-        )
+        logger.info(f"Correction factors: TTFT={self.p_correction_factor:.3f}, ITL={self.d_correction_factor:.3f}")
 
         if self.prom_metrics:
             m = self.prom_metrics
@@ -410,9 +376,7 @@ class Planner:
     async def make_adjustments(self):
         """Compute and apply scaling decisions based on observed and predicted metrics."""
         if not self.last_metrics.is_valid():
-            logger.info(
-                "Metrics contain None/NaN (no active requests), skipping adjustment"
-            )
+            logger.info("Metrics contain None/NaN (no active requests), skipping adjustment")
             return
 
         # Update correction factors unless disabled
@@ -431,16 +395,13 @@ class Planner:
         # Export predicted metrics
         if self.prom_metrics:
             m = self.prom_metrics
-            m.set(m.predicted_request_rate,
-                  next_num_req / self.config.adjustment_interval)
+            m.set(m.predicted_request_rate, next_num_req / self.config.adjustment_interval)
             m.set(m.predicted_isl, next_isl)
             m.set(m.predicted_osl, next_osl)
 
         # Compute required replicas
         try:
-            next_num_p, next_num_d = self._compute_replica_requirements(
-                next_num_req, next_isl, next_osl
-            )
+            next_num_p, next_num_d = self._compute_replica_requirements(next_num_req, next_isl, next_osl)
         except Exception as e:
             logger.error(f"Failed to compute replica requirements: {e}")
             return

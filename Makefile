@@ -1,9 +1,31 @@
-.PHONY: build generate manifests test lint clean docker-build docker-build-planner docker-build-profiler
+.PHONY: build generate manifests test lint clean docker-build docker-build-planner docker-build-profiler controller-gen golangci-lint fmt-verify ci-lint lint-python fmt-python test-go test-python update-helm helm-lint verify
 
-CONTROLLER_GEN ?= $(shell which controller-gen 2>/dev/null || echo $(shell go env GOPATH)/bin/controller-gen)
+##@ Build Tools
+
+LOCALBIN ?= $(shell pwd)/bin
+CONTROLLER_TOOLS_VERSION ?= v0.21.0
+GOLANGCI_LINT_VERSION ?= v2.1.4
+YAML_PROCESSOR_LOG_LEVEL ?= info
+
+CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
+GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
+
 OPERATOR_IMG ?= rbg-planner-operator:latest
 PLANNER_IMG ?= rbg-planner:latest
 PROFILER_IMG ?= rbg-profiler:latest
+
+define go-install-tool
+@[ -f "$(1)" ] || { set -e; \
+mkdir -p $(LOCALBIN); \
+GOBIN=$(LOCALBIN) go install "$(2)"; \
+}
+endef
+
+controller-gen: ## Download controller-gen locally if necessary.
+	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen@$(CONTROLLER_TOOLS_VERSION))
+
+golangci-lint: ## Download golangci-lint locally if necessary.
+	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION))
 
 ##@ General
 
@@ -12,12 +34,21 @@ help: ## Display this help.
 
 ##@ Development
 
-generate: ## Generate deepcopy methods.
+generate: controller-gen ## Generate deepcopy methods.
 	$(CONTROLLER_GEN) object paths=./api/...
 
-manifests: ## Generate CRD manifests.
+manifests: controller-gen ## Generate CRD manifests.
 	$(CONTROLLER_GEN) crd:allowDangerousTypes=true paths=./api/... output:crd:dir=config/crd
 	$(CONTROLLER_GEN) rbac:roleName=rbg-planner-operator paths=./internal/... output:rbac:dir=config/rbac
+	cp -f ./config/crd/inference-extension.rolebasedgroup.io_autoscalers.yaml ./charts/rbg-planner/crds/
+
+update-helm: manifests ## Sync generated manifests to Helm chart.
+	GOFLAGS=-mod=mod go run -modfile=hack/tools/yaml-processor/go.mod \
+	  sigs.k8s.io/kueue/hack/tools/yaml-processor \
+	  -zap-log-level=$(YAML_PROCESSOR_LOG_LEVEL) hack/processing-plan.yaml
+
+helm-lint: ## Lint the Helm chart.
+	helm lint charts/rbg-planner/ --set prometheus.endpoint=http://test:9090
 
 fmt: ## Run go fmt.
 	go fmt ./...
@@ -25,14 +56,30 @@ fmt: ## Run go fmt.
 vet: ## Run go vet.
 	go vet ./...
 
-lint: vet ## Run linters.
-	go vet ./...
+fmt-verify: ## Verify go fmt.
+	@files=$$(gofmt -l .); if [ -n "$$files" ]; then echo "Unformatted files:"; echo "$$files"; exit 1; fi
 
-test: ## Run Go tests.
-	go test ./... -v
+ci-lint: golangci-lint ## Run golangci-lint.
+	$(GOLANGCI_LINT) run --timeout 15m0s
 
-test-python: ## Run Python planner tests.
-	cd python/planner && pip install -e ".[dev]" && pytest tests/ -v
+lint-python: ## Run Python linter (ruff).
+	cd python/planner && pip install -e ".[dev]" && ruff check . && ruff format --check .
+
+fmt-python: ## Format Python code (ruff).
+	cd python/planner && ruff format .
+
+lint: ci-lint lint-python ## Run all linters.
+
+test-go: ## Run Go tests with coverage.
+	go test ./... -v -coverprofile=cover.out
+
+test-python: ## Run Python planner tests with coverage.
+	cd python/planner && pip install -e ".[dev]" && pytest tests/ -v --cov=rbg_planner
+
+test: test-go test-python ## Run all tests.
+
+verify: manifests generate update-helm ## Verify no drift in generated artifacts.
+	git --no-pager diff --exit-code config api charts
 
 ##@ Build
 

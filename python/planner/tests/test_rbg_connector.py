@@ -14,8 +14,10 @@ def mock_k8s():
     """Patch kubernetes config loading and CustomObjectsApi."""
     from kubernetes import client as real_client
 
-    with patch("rbg_planner.rbg_connector.config") as mock_config, \
-         patch("rbg_planner.rbg_connector.client") as mock_client:
+    with (
+        patch("rbg_planner.rbg_connector.config") as mock_config,
+        patch("rbg_planner.rbg_connector.client") as mock_client,
+    ):
         mock_config.load_incluster_config.side_effect = ConfigException("not in cluster")
         mock_api = MagicMock()
         mock_client.CustomObjectsApi.return_value = mock_api
@@ -35,9 +37,7 @@ def sample_rbg():
             ]
         },
         "status": {
-            "conditions": [
-                {"type": "Ready", "status": "True"}
-            ],
+            "conditions": [{"type": "Ready", "status": "True"}],
             "roleStatuses": [
                 {"name": "prefill", "readyReplicas": 2, "replicas": 2},
                 {"name": "decode", "readyReplicas": 3, "replicas": 3},
@@ -135,9 +135,7 @@ class TestPatchRBGRoleReplicas:
 
         mock_api.patch_namespaced_custom_object.assert_called_once()
         call_kwargs = mock_api.patch_namespaced_custom_object.call_args[1]
-        assert call_kwargs["body"] == [
-            {"op": "replace", "path": "/spec/roles/1/replicas", "value": 5}
-        ]
+        assert call_kwargs["body"] == [{"op": "replace", "path": "/spec/roles/1/replicas", "value": 5}]
         assert call_kwargs["_content_type"] == "application/json-patch+json"
 
 
@@ -152,13 +150,7 @@ class TestIsReady:
 
     def test_ready_false(self, mock_k8s):
         mock_api, _ = mock_k8s
-        rbg_not_ready = {
-            "status": {
-                "conditions": [
-                    {"type": "Ready", "status": "False"}
-                ]
-            }
-        }
+        rbg_not_ready = {"status": {"conditions": [{"type": "Ready", "status": "False"}]}}
         connector = RBGConnector(rbg_name="test-rbg", rbg_namespace="default")
         connector._cached_rbg = rbg_not_ready
         assert connector.is_ready() is False

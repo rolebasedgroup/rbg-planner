@@ -13,7 +13,6 @@ from rbg_planner.metrics.prometheus import MetricNames, PrometheusAdapter
 
 
 class SGLangAdapter(PrometheusAdapter):
-
     def __init__(self, url: str):
         super().__init__(url)
         self.metrics = MetricNames(
