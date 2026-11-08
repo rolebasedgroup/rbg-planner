@@ -846,7 +846,6 @@ func TestEnsurePlannerDeployment_SetsImagePullSecrets(t *testing.T) {
 	}
 }
 
-<<<<<<< HEAD
 func TestParseRASSpec_MetricsBasicAuth(t *testing.T) {
 	ras := &unstructured.Unstructured{
 		Object: map[string]interface{}{
@@ -1026,7 +1025,7 @@ func TestShouldShortCircuitFailed(t *testing.T) {
 			ras := &unstructured.Unstructured{}
 			ras.SetGeneration(tt.gen)
 			ras.Object["status"] = map[string]interface{}{
-				"phase":                           tt.phase,
+				"phase":                          tt.phase,
 				"lastProfilingFailureGeneration": tt.lastFail,
 			}
 			if got := shouldShortCircuitFailed(ras); got != tt.want {
