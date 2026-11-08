@@ -61,6 +61,13 @@ spec:
           spec:
             description: AutoScalerSpec defines the desired state of AutoScaler.
             properties:
+              backend:
+                default: sglang-oai
+                description: |-
+                  Backend selects the inference engine backend for both profiling (bench)
+                  and online metrics collection. Examples: "sglang-oai", "vllm", "vllm-chat".
+                  When empty, defaults to "sglang-oai".
+                type: string
               implementation:
                 description: Implementation defines the scaling engine and its configuration.
                 properties:
@@ -69,6 +76,7 @@ spec:
                       planner.
                     properties:
                       dryRun:
+                        default: false
                         description: DryRun enables observe-only mode without actual
                           scaling.
                         type: boolean
@@ -101,19 +109,25 @@ spec:
                             default: 9091
                             description: Port is the port for planner's own Prometheus
                               metrics exposition.
+                            format: int32
+                            maximum: 65535
+                            minimum: 1
                             type: integer
                         type: object
                       modelName:
                         description: ModelName is the model name used for Prometheus
                           label filtering.
+                        minLength: 1
                         type: string
                       noCorrection:
+                        default: false
                         description: NoCorrection disables SLA correction factors.
                         type: boolean
                       predictionWindow:
                         default: 50
                         description: PredictionWindow is the number of data points
                           in the predictor window.
+                        format: int32
                         type: integer
                       profiling:
                         description: Profiling configures automatic SLA profiling.
@@ -123,12 +137,39 @@ spec:
                               Image is the container image for the profiling tool.
                               If empty, a default image is used.
                             type: string
+                          modelCache:
+                            description: |-
+                              ModelCache provides PVC configuration for the profiler to access
+                              model weights and tokenizer files. When provided, the operator mounts
+                              the PVC and passes the tokenizer path to the profiler via --tokenizer.
+                            properties:
+                              modelPath:
+                                description: |-
+                                  ModelPath is the path to the model/tokenizer directory within the PVC
+                                  (e.g. "deepseek-r1" or "models/Llama-3.1-405B"). May also be a
+                                  container-visible absolute path already under MountPath. Such an absolute
+                                  path is interpreted as container-visible; use the relative form without a
+                                  leading slash to address the same path prefix within the PVC.
+                                type: string
+                              mountPath:
+                                default: /opt/model-cache
+                                description: MountPath is the mount path for the PVC
+                                  inside the profiler container.
+                                type: string
+                              pvcName:
+                                description: |-
+                                  PVCName is the name of the PersistentVolumeClaim containing model weights.
+                                  The PVC must exist in the same namespace as the AutoScaler.
+                                type: string
+                            type: object
                         type: object
                       ttft:
                         default: 500
                         description: TTFT is the target Time to First Token SLA in
                           milliseconds.
                         type: number
+                    required:
+                    - modelName
                     type: object
                 type: object
               pattern:
@@ -155,14 +196,15 @@ spec:
                             minimum: 1
                             type: integer
                           roleName:
-                            default: prefill
                             description: RoleName is the name of the role in the RoleBasedGroup.
                             type: string
                         required:
                         - maxReplicas
-                        - minReplicas
                         - roleName
                         type: object
+                        x-kubernetes-validations:
+                        - message: minReplicas must not exceed maxReplicas
+                          rule: '!has(self.minReplicas) || self.minReplicas <= self.maxReplicas'
                       prefill:
                         description: Prefill defines the prefill role scaling configuration.
                         properties:
@@ -180,14 +222,15 @@ spec:
                             minimum: 1
                             type: integer
                           roleName:
-                            default: prefill
                             description: RoleName is the name of the role in the RoleBasedGroup.
                             type: string
                         required:
                         - maxReplicas
-                        - minReplicas
                         - roleName
                         type: object
+                        x-kubernetes-validations:
+                        - message: minReplicas must not exceed maxReplicas
+                          rule: '!has(self.minReplicas) || self.minReplicas <= self.maxReplicas'
                     required:
                     - decode
                     - prefill
@@ -213,14 +256,18 @@ spec:
                         type: string
                     required:
                     - maxReplicas
-                    - minReplicas
                     - roleName
                     type: object
+                    x-kubernetes-validations:
+                    - message: minReplicas must not exceed maxReplicas
+                      rule: '!has(self.minReplicas) || self.minReplicas <= self.maxReplicas'
                 type: object
               scalingInterval:
                 default: 180
                 description: ScalingInterval is the number of seconds between scaling
                   decisions.
+                format: int32
+                minimum: 1
                 type: integer
             required:
             - implementation
@@ -287,6 +334,9 @@ spec:
                   - type
                   type: object
                 type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
               decodeReplicas:
                 description: DecodeReplicas is the current decode replica count.
                 format: int32

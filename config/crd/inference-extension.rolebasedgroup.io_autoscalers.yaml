@@ -61,6 +61,13 @@ spec:
           spec:
             description: AutoScalerSpec defines the desired state of AutoScaler.
             properties:
+              backend:
+                default: sglang-oai
+                description: |-
+                  Backend selects the inference engine backend for both profiling (bench)
+                  and online metrics collection. Examples: "sglang-oai", "vllm", "vllm-chat".
+                  When empty, defaults to "sglang-oai".
+                type: string
               implementation:
                 description: Implementation defines the scaling engine and its configuration.
                 properties:
@@ -130,6 +137,31 @@ spec:
                               Image is the container image for the profiling tool.
                               If empty, a default image is used.
                             type: string
+                          modelCache:
+                            description: |-
+                              ModelCache provides PVC configuration for the profiler to access
+                              model weights and tokenizer files. When provided, the operator mounts
+                              the PVC and passes the tokenizer path to the profiler via --tokenizer.
+                            properties:
+                              modelPath:
+                                description: |-
+                                  ModelPath is the path to the model/tokenizer directory within the PVC
+                                  (e.g. "deepseek-r1" or "models/Llama-3.1-405B"). May also be a
+                                  container-visible absolute path already under MountPath. Such an absolute
+                                  path is interpreted as container-visible; use the relative form without a
+                                  leading slash to address the same path prefix within the PVC.
+                                type: string
+                              mountPath:
+                                default: /opt/model-cache
+                                description: MountPath is the mount path for the PVC
+                                  inside the profiler container.
+                                type: string
+                              pvcName:
+                                description: |-
+                                  PVCName is the name of the PersistentVolumeClaim containing model weights.
+                                  The PVC must exist in the same namespace as the AutoScaler.
+                                type: string
+                            type: object
                         type: object
                       ttft:
                         default: 500

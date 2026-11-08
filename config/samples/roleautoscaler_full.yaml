@@ -5,6 +5,7 @@ metadata:
   namespace: inference
 spec:
   scalingInterval: 180    # seconds between scaling decisions
+  backend: sglang-oai     # inference engine backend (bench + metrics)
 
   # Scaling pattern
   pattern:
@@ -42,6 +43,13 @@ spec:
 
       profiling:
         image: "ghcr.io/rolebasedgroup/rbg-profiler:latest"
+        # ModelCache mounts a PVC with pre-downloaded model weights and
+        # tokenizer files. When omitted, the profiler falls back to
+        # downloading the tokenizer from HuggingFace using modelName.
+        modelCache:
+          pvcName: "model-weights"
+          modelPath: "deepseek-r1"
+          mountPath: "/opt/model-cache"
 
       # Metrics configuration
       metricsEndpoint:

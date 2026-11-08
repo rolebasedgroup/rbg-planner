@@ -28,6 +28,13 @@ type AutoScalerSpec struct {
 	// +kubebuilder:validation:Minimum=1
 	ScalingInterval *int32 `json:"scalingInterval,omitempty"`
 
+	// Backend selects the inference engine backend for both profiling (bench)
+	// and online metrics collection. Examples: "sglang-oai", "vllm", "vllm-chat".
+	// When empty, defaults to "sglang-oai".
+	// +optional
+	// +kubebuilder:default="sglang-oai"
+	Backend string `json:"backend,omitempty"`
+
 	// Pattern defines the scaling pattern and per-role configuration.
 	Pattern Pattern `json:"pattern"`
 
@@ -151,6 +158,34 @@ type ProfilingConfig struct {
 	// If empty, a default image is used.
 	// +optional
 	Image string `json:"image,omitempty"`
+
+	// ModelCache provides PVC configuration for the profiler to access
+	// model weights and tokenizer files. When provided, the operator mounts
+	// the PVC and passes the tokenizer path to the profiler via --tokenizer.
+	// +optional
+	ModelCache *ModelCacheSpec `json:"modelCache,omitempty"`
+}
+
+// ModelCacheSpec references a PVC containing pre-downloaded model weights
+// and tokenizer files for the profiling job.
+type ModelCacheSpec struct {
+	// PVCName is the name of the PersistentVolumeClaim containing model weights.
+	// The PVC must exist in the same namespace as the AutoScaler.
+	// +optional
+	PVCName string `json:"pvcName,omitempty"`
+
+	// ModelPath is the path to the model/tokenizer directory within the PVC
+	// (e.g. "deepseek-r1" or "models/Llama-3.1-405B"). May also be a
+	// container-visible absolute path already under MountPath. Such an absolute
+	// path is interpreted as container-visible; use the relative form without a
+	// leading slash to address the same path prefix within the PVC.
+	// +optional
+	ModelPath string `json:"modelPath,omitempty"`
+
+	// MountPath is the mount path for the PVC inside the profiler container.
+	// +optional
+	// +kubebuilder:default="/opt/model-cache"
+	MountPath string `json:"mountPath,omitempty"`
 }
 
 // MetricsEndpointConfig configures metrics collection.

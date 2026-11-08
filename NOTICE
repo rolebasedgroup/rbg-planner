@@ -14,3 +14,11 @@ Specifically, the following components are ported or adapted from Dynamo:
 - Kubernetes connector (python/planner/rbg_planner/rbg_connector.py)
 - Planner configuration (python/planner/rbg_planner/config.py)
 - Profiling methodology (python/profiler/rbg_profiler/)
+
+This product includes software adapted from sglang
+(https://github.com/sgl-project/sglang), licensed under the Apache License 2.0.
+Copyright (c) sglang contributors. All rights reserved.
+
+Specifically, the following component is adapted from sglang:
+- Benchmark serving logic (python/profiler/rbg_profiler/bench_serving.py)
+  adapted from https://github.com/sgl-project/sglang/blob/v0.5.16/python/sglang/benchmark/serving.py

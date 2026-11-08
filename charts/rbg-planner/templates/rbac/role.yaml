@@ -20,6 +20,13 @@ rules:
       - update
       - watch
   - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
+  - apiGroups:
       - apps
     resources:
       - deployments
@@ -86,4 +93,11 @@ rules:
     verbs:
       - get
       - list
+      - patch
       - watch
+  - apiGroups:
+      - workloads.x-k8s.io
+    resources:
+      - rolebasedgroupscalingadapters/scale
+    verbs:
+      - patch
