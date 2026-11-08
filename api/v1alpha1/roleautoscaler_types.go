@@ -25,7 +25,8 @@ type AutoScalerSpec struct {
 	// ScalingInterval is the number of seconds between scaling decisions.
 	// +optional
 	// +kubebuilder:default=180
-	ScalingInterval int `json:"scalingInterval,omitempty"`
+	// +kubebuilder:validation:Minimum=1
+	ScalingInterval *int32 `json:"scalingInterval,omitempty"`
 
 	// Pattern defines the scaling pattern and per-role configuration.
 	Pattern Pattern `json:"pattern"`
@@ -57,9 +58,9 @@ type PDDisaggregatedPattern struct {
 }
 
 // RoleScalingConfig defines scaling bounds for a single role.
+// +kubebuilder:validation:XValidation:rule="!has(self.minReplicas) || self.minReplicas <= self.maxReplicas",message="minReplicas must not exceed maxReplicas"
 type RoleScalingConfig struct {
 	// RoleName is the name of the role in the RoleBasedGroup.
-	// +kubebuilder:default="prefill"
 	RoleName string `json:"roleName"`
 
 	// MaxReplicas is the maximum number of replicas for this role.
@@ -69,11 +70,12 @@ type RoleScalingConfig struct {
 	// MinReplicas is the minimum number of replicas for this role.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:default=1
-	MinReplicas int32 `json:"minReplicas"`
+	MinReplicas *int32 `json:"minReplicas,omitempty"`
 }
 
 // UnifiedPattern defines scaling for unified (non-disaggregated) inference.
 // Reserved for future use — not yet implemented.
+// +kubebuilder:validation:XValidation:rule="!has(self.minReplicas) || self.minReplicas <= self.maxReplicas",message="minReplicas must not exceed maxReplicas"
 type UnifiedPattern struct {
 	// RoleName is the name of the role in the RoleBasedGroup.
 	RoleName string `json:"roleName"`
@@ -85,7 +87,7 @@ type UnifiedPattern struct {
 	// MinReplicas is the minimum number of replicas.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:default=1
-	MinReplicas int32 `json:"minReplicas"`
+	MinReplicas *int32 `json:"minReplicas,omitempty"`
 }
 
 // Implementation is a discriminated union of scaling engines.
@@ -99,18 +101,19 @@ type Implementation struct {
 // DynamoPlannerConfig defines configuration for the Dynamo planner engine.
 type DynamoPlannerConfig struct {
 	// ModelName is the model name used for Prometheus label filtering.
-	// +optional
-	ModelName string `json:"modelName,omitempty"`
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	ModelName string `json:"modelName"`
 
 	// TTFT is the target Time to First Token SLA in milliseconds.
 	// +optional
 	// +kubebuilder:default=500
-	TTFT float64 `json:"ttft,omitempty"`
+	TTFT *float64 `json:"ttft,omitempty"`
 
 	// ITL is the target Inter-Token Latency SLA in milliseconds.
 	// +optional
 	// +kubebuilder:default=50
-	ITL float64 `json:"itl,omitempty"`
+	ITL *float64 `json:"itl,omitempty"`
 
 	// LoadPredictor selects the load prediction algorithm.
 	// +optional
@@ -121,15 +124,17 @@ type DynamoPlannerConfig struct {
 	// PredictionWindow is the number of data points in the predictor window.
 	// +optional
 	// +kubebuilder:default=50
-	PredictionWindow int `json:"predictionWindow,omitempty"`
+	PredictionWindow *int32 `json:"predictionWindow,omitempty"`
 
 	// NoCorrection disables SLA correction factors.
 	// +optional
-	NoCorrection bool `json:"noCorrection,omitempty"`
+	// +kubebuilder:default=false
+	NoCorrection *bool `json:"noCorrection,omitempty"`
 
 	// DryRun enables observe-only mode without actual scaling.
 	// +optional
-	DryRun bool `json:"dryRun,omitempty"`
+	// +kubebuilder:default=false
+	DryRun *bool `json:"dryRun,omitempty"`
 
 	// Profiling configures automatic SLA profiling.
 	// +optional
@@ -159,7 +164,9 @@ type MetricsEndpointConfig struct {
 	// Port is the port for planner's own Prometheus metrics exposition.
 	// +optional
 	// +kubebuilder:default=9091
-	Port int `json:"port,omitempty"`
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	Port *int32 `json:"port,omitempty"`
 }
 
 // AutoScalerPhase represents the current phase of an AutoScaler.
@@ -180,8 +187,11 @@ type AutoScalerStatus struct {
 	Phase AutoScalerPhase `json:"phase,omitempty"`
 
 	// Conditions represent the latest available observations of the AutoScaler's state.
-	// +optional
-	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	// +patchMergeKey=type
+	// +patchStrategy=merge
+	// +listType=map
+	// +listMapKey=type
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
 
 	// PrefillReplicas is the current prefill replica count.
 	// +optional

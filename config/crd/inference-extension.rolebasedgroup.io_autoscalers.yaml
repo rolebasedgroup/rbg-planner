@@ -69,6 +69,7 @@ spec:
                       planner.
                     properties:
                       dryRun:
+                        default: false
                         description: DryRun enables observe-only mode without actual
                           scaling.
                         type: boolean
@@ -101,19 +102,25 @@ spec:
                             default: 9091
                             description: Port is the port for planner's own Prometheus
                               metrics exposition.
+                            format: int32
+                            maximum: 65535
+                            minimum: 1
                             type: integer
                         type: object
                       modelName:
                         description: ModelName is the model name used for Prometheus
                           label filtering.
+                        minLength: 1
                         type: string
                       noCorrection:
+                        default: false
                         description: NoCorrection disables SLA correction factors.
                         type: boolean
                       predictionWindow:
                         default: 50
                         description: PredictionWindow is the number of data points
                           in the predictor window.
+                        format: int32
                         type: integer
                       profiling:
                         description: Profiling configures automatic SLA profiling.
@@ -129,6 +136,8 @@ spec:
                         description: TTFT is the target Time to First Token SLA in
                           milliseconds.
                         type: number
+                    required:
+                    - modelName
                     type: object
                 type: object
               pattern:
@@ -155,14 +164,15 @@ spec:
                             minimum: 1
                             type: integer
                           roleName:
-                            default: prefill
                             description: RoleName is the name of the role in the RoleBasedGroup.
                             type: string
                         required:
                         - maxReplicas
-                        - minReplicas
                         - roleName
                         type: object
+                        x-kubernetes-validations:
+                        - message: minReplicas must not exceed maxReplicas
+                          rule: '!has(self.minReplicas) || self.minReplicas <= self.maxReplicas'
                       prefill:
                         description: Prefill defines the prefill role scaling configuration.
                         properties:
@@ -180,14 +190,15 @@ spec:
                             minimum: 1
                             type: integer
                           roleName:
-                            default: prefill
                             description: RoleName is the name of the role in the RoleBasedGroup.
                             type: string
                         required:
                         - maxReplicas
-                        - minReplicas
                         - roleName
                         type: object
+                        x-kubernetes-validations:
+                        - message: minReplicas must not exceed maxReplicas
+                          rule: '!has(self.minReplicas) || self.minReplicas <= self.maxReplicas'
                     required:
                     - decode
                     - prefill
@@ -213,14 +224,18 @@ spec:
                         type: string
                     required:
                     - maxReplicas
-                    - minReplicas
                     - roleName
                     type: object
+                    x-kubernetes-validations:
+                    - message: minReplicas must not exceed maxReplicas
+                      rule: '!has(self.minReplicas) || self.minReplicas <= self.maxReplicas'
                 type: object
               scalingInterval:
                 default: 180
                 description: ScalingInterval is the number of seconds between scaling
                   decisions.
+                format: int32
+                minimum: 1
                 type: integer
             required:
             - implementation
@@ -287,6 +302,9 @@ spec:
                   - type
                   type: object
                 type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
               decodeReplicas:
                 description: DecodeReplicas is the current decode replica count.
                 format: int32
