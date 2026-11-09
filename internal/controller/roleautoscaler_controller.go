@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -257,8 +258,9 @@ type parsedSpec struct {
 	dryRun               bool
 	profilingImage       string
 	profilingInputFormat string
-	metricSource         string
+	metricEngine         string
 	metricsPort          int
+	metricQueriesJSON    string
 	prometheusEndpoint   string
 	// per-CR overrides from spec.implementation.dynamoPlanner.metrics
 	prometheusEndpointOverride string
@@ -346,11 +348,16 @@ func (r *AutoScalerReconciler) parseRASSpec(ras *unstructured.Unstructured) (*pa
 
 	// metrics
 	me, _ := dp["metrics"].(map[string]interface{})
-	s.metricSource = getStrField(me, "metricSource", "")
+	s.metricEngine = getStrField(me, "engine", "")
 	s.metricsPort = getIntField(me, "port", 9091)
 	s.prometheusEndpointOverride = getStrField(me, "endpoint", "")
 	if err := parseMetricsAuth(me, s); err != nil {
 		return nil, fmt.Errorf("metrics auth: %w", err)
+	}
+	if q, ok := me["queries"].(map[string]interface{}); ok && q != nil {
+		if b, err := json.Marshal(q); err == nil {
+			s.metricQueriesJSON = string(b)
+		}
 	}
 
 	// prometheusEndpoint
@@ -753,10 +760,10 @@ func buildPlannerEnv(rbgName string, spec *parsedSpec, namespace string, maxGPUB
 		{Name: "PROFILE_RESULTS_DIR", Value: "/etc/rbg-planner/profiling"},
 		{Name: "PLANNER_PROMETHEUS_PORT", Value: strconv.Itoa(spec.metricsPort)},
 	}
-	// Only set METRIC_SOURCE when explicitly configured; otherwise the
+	// Only set METRIC_ENGINE when explicitly configured; otherwise the
 	// planner derives it from BACKEND (e.g. "sglang-oai" -> "sglang").
-	if spec.metricSource != "" {
-		env = append(env, corev1.EnvVar{Name: "METRIC_SOURCE", Value: spec.metricSource})
+	if spec.metricEngine != "" {
+		env = append(env, corev1.EnvVar{Name: "METRIC_ENGINE", Value: spec.metricEngine})
 	}
 	// Prometheus credentials: prefer the per-CR metrics secret selectors
 	// (never inlined into the pod spec); fall back to forwarding
@@ -785,6 +792,9 @@ func buildPlannerEnv(rbgName string, spec *parsedSpec, namespace string, maxGPUB
 		if v := os.Getenv("PROMETHEUS_PASSWORD"); v != "" {
 			env = append(env, corev1.EnvVar{Name: "PROMETHEUS_PASSWORD", Value: v})
 		}
+	}
+	if spec.metricQueriesJSON != "" {
+		env = append(env, corev1.EnvVar{Name: "METRIC_QUERIES_JSON", Value: spec.metricQueriesJSON})
 	}
 	return env
 }

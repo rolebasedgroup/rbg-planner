@@ -1,0 +1,4 @@
+{
+  "ttft": "sum(rate(custom_ttft_seconds{modelFilter}[{interval}]))",
+  "isl": "sum(increase(custom_prompt_tokens{modelFilter}[{interval}])) / sum(increase(custom_requests{modelFilter}[{interval}]))"
+}

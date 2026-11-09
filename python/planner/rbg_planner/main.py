@@ -25,11 +25,16 @@ def parse_args() -> argparse.Namespace:
     # Prometheus
     parser.add_argument("--prometheus-endpoint", type=str, default=None, help="Prometheus URL")
     parser.add_argument(
-        "--metric-source",
+        "--metric-engine",
         type=str,
         default=None,
-        choices=["sglang", "vllm", "patio"],
-        help="Metric source (sglang, vllm, patio)",
+        help="Metrics engine (sglang, vllm, dynamo, patio, or a custom engine name)",
+    )
+    parser.add_argument(
+        "--metric-queries-json",
+        type=str,
+        default=None,
+        help='JSON object of per-slot PromQL query overrides (e.g. {"ttft": "..."})',
     )
     parser.add_argument("--model-name", type=str, default=None, help="Model name for metric filtering")
 
@@ -64,13 +69,8 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_config(args: argparse.Namespace) -> PlannerConfig:  # noqa: C901
-    """Build PlannerConfig from CLI args (override) + env vars (default).
-
-    Complexity is high because each config field is individually overridden from
-    CLI args when provided. This explicit one-field-at-a-time pattern is clearer
-    than a generic getattr/setattr loop and is intentionally kept readable.
-    """
+def build_config(args: argparse.Namespace) -> PlannerConfig:
+    """Build PlannerConfig from CLI args (override) + env vars (default)."""
     config = PlannerConfig()
 
     # CLI args override env vars
@@ -84,8 +84,10 @@ def build_config(args: argparse.Namespace) -> PlannerConfig:  # noqa: C901
         config.decode_role_name = args.decode_role_name
     if args.prometheus_endpoint is not None:
         config.prometheus_endpoint = args.prometheus_endpoint
-    if args.metric_source is not None:
-        config.metric_source = args.metric_source
+    if args.metric_engine is not None:
+        config.metric_engine = args.metric_engine
+    if args.metric_queries_json is not None:
+        config.metric_queries_json = args.metric_queries_json
     if args.model_name is not None:
         config.model_name = args.model_name
     if args.adjustment_interval is not None:
@@ -134,7 +136,7 @@ def main():
         sys.exit(1)
 
     logger.info(f"RBG Planner starting for {config.rbg_name} in {config.rbg_namespace}")
-    logger.info(f"Metric source: {config.metric_source}, Model: {config.model_name or '(all)'}")
+    logger.info(f"Metrics engine: {config.metric_engine}, Model: {config.model_name or '(all)'}")
     logger.info(f"SLA targets: TTFT={config.ttft_sla}ms, ITL={config.itl_sla}ms")
 
     planner = Planner(config)

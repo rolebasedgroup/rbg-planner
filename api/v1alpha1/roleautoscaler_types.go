@@ -215,13 +215,15 @@ type ModelSourceSpec struct {
 	MountPath string `json:"mountPath,omitempty"`
 }
 
-// MetricsConfig configures metrics collection.
+// MetricsConfig configures metrics collection and exposition.
 type MetricsConfig struct {
-	// MetricSource selects the metric source type.
+	// Engine selects the inference engine preset that provides built-in
+	// Prometheus queries. Built-in: sglang, vllm, dynamo, patio. Any other
+	// value is a custom engine whose queries must be fully specified in
+	// spec.metrics.queries.
 	// +optional
 	// +kubebuilder:default="sglang"
-	// +kubebuilder:validation:Enum=sglang;vllm;patio
-	MetricSource string `json:"metricSource,omitempty"`
+	Engine string `json:"engine,omitempty"`
 
 	// Port is the port for planner's own Prometheus metrics exposition.
 	// +optional
@@ -239,6 +241,15 @@ type MetricsConfig struct {
 	// endpoint, grouped by mechanism. At most one mechanism may be set.
 	// +optional
 	Authentication *AuthenticationConfig `json:"authentication,omitempty"`
+
+	// Queries overrides the built-in Prometheus queries for the selected
+	// engine, keyed by logical metric slot: ttft, itl, requestsTotal,
+	// requestDuration, isl, osl. Each value is a complete PromQL
+	// expression. Slots omitted here fall back to the engine's built-in
+	// queries; a custom engine must provide all six.
+	// +optional
+	// +kubebuilder:validation:XValidation:rule="self.all(key, key in ['ttft', 'itl', 'requestsTotal', 'requestDuration', 'isl', 'osl'])",message="query keys must be one of: ttft, itl, requestsTotal, requestDuration, isl, osl"
+	Queries map[string]string `json:"queries,omitempty"`
 }
 
 // AuthenticationConfig groups Prometheus query credentials by mechanism.

@@ -18,6 +18,9 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -565,6 +568,259 @@ func TestCleanupClusterResources_NothingToCleanUp(t *testing.T) {
 
 	if err := r.cleanupClusterResources(context.Background(), ras); err != nil {
 		t.Fatalf("expected nil error, got: %v", err)
+	}
+}
+
+func TestBuildPlannerEnv_MetricQueriesJSON(t *testing.T) {
+	spec := &parsedSpec{
+		prefillRoleName:    "prefill",
+		decodeRoleName:     "decode",
+		backend:            "sglang-oai",
+		modelName:          "Qwen",
+		scalingInterval:    180,
+		ttft:               200,
+		itl:                20,
+		loadPredictor:      "arima",
+		predictionWindow:   50,
+		metricsPort:        9091,
+		prometheusEndpoint: "http://prom:9090",
+		metricQueriesJSON:  `{"ttft":"sum(rate(custom_ttft[5m]))"}`,
+	}
+
+	env := buildPlannerEnv("test-rbg", spec, "ns", 8, 1, 1)
+
+	var got string
+	for _, e := range env {
+		if e.Name == "METRIC_QUERIES_JSON" {
+			got = e.Value
+		}
+	}
+	if got != `{"ttft":"sum(rate(custom_ttft[5m]))"}` {
+		t.Errorf("expected METRIC_QUERIES_JSON set, got %q", got)
+	}
+}
+
+func TestBuildPlannerEnv_NoMetricQueriesJSONWhenEmpty(t *testing.T) {
+	spec := &parsedSpec{
+		prefillRoleName:    "prefill",
+		decodeRoleName:     "decode",
+		backend:            "sglang-oai",
+		modelName:          "Qwen",
+		scalingInterval:    180,
+		ttft:               200,
+		itl:                20,
+		loadPredictor:      "arima",
+		predictionWindow:   50,
+		metricsPort:        9091,
+		prometheusEndpoint: "http://prom:9090",
+	}
+
+	env := buildPlannerEnv("test-rbg", spec, "ns", 8, 1, 1)
+
+	for _, e := range env {
+		if e.Name == "METRIC_QUERIES_JSON" {
+			t.Errorf("did not expect METRIC_QUERIES_JSON when empty, got %q", e.Value)
+		}
+	}
+}
+
+func TestBuildPlannerEnv_MetricEngine(t *testing.T) {
+	spec := &parsedSpec{
+		prefillRoleName:    "prefill",
+		decodeRoleName:     "decode",
+		backend:            "sglang-oai",
+		modelName:          "Qwen",
+		scalingInterval:    180,
+		ttft:               200,
+		itl:                20,
+		loadPredictor:      "arima",
+		predictionWindow:   50,
+		metricsPort:        9091,
+		prometheusEndpoint: "http://prom:9090",
+		metricEngine:       "vllm",
+	}
+
+	env := buildPlannerEnv("test-rbg", spec, "ns", 8, 1, 1)
+
+	var got string
+	for _, e := range env {
+		if e.Name == "METRIC_ENGINE" {
+			got = e.Value
+		}
+	}
+	if got != "vllm" {
+		t.Errorf("expected METRIC_ENGINE vllm, got %q", got)
+	}
+}
+
+func TestParseRASSpec_MetricsEngineAndQueries(t *testing.T) {
+	ras := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"spec": map[string]interface{}{
+				"scalingInterval": 180,
+				"backend":         "sglang-oai",
+				"pattern": map[string]interface{}{
+					"pdDisaggregated": map[string]interface{}{
+						"prefill": map[string]interface{}{
+							"roleName":    "prefill",
+							"maxReplicas": int64(10),
+							"minReplicas": int64(1),
+						},
+						"decode": map[string]interface{}{
+							"roleName":    "decode",
+							"maxReplicas": int64(10),
+							"minReplicas": int64(1),
+						},
+					},
+				},
+				"implementation": map[string]interface{}{
+					"dynamoPlanner": map[string]interface{}{
+						"modelName": "Qwen",
+						"sla": map[string]interface{}{
+							"ttft": 200.0,
+							"itl":  20.0,
+						},
+						"metrics": map[string]interface{}{
+							"engine": "vllm",
+							"port":   int64(9091),
+							"queries": map[string]interface{}{
+								"ttft": "sum(rate(vllm:time_to_first_token_seconds_v2_sum[5m]))",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	r := &AutoScalerReconciler{}
+	spec, err := r.parseRASSpec(ras)
+	if err != nil {
+		t.Fatalf("parseRASSpec failed: %v", err)
+	}
+	if spec.metricEngine != "vllm" {
+		t.Errorf("expected metricEngine vllm, got %q", spec.metricEngine)
+	}
+	if spec.metricQueriesJSON == "" {
+		t.Fatal("expected non-empty metricQueriesJSON")
+	}
+	if !strings.Contains(spec.metricQueriesJSON, "vllm:time_to_first_token_seconds_v2_sum") {
+		t.Errorf("expected metricQueriesJSON to contain the overridden ttft, got %q", spec.metricQueriesJSON)
+	}
+}
+
+func TestParseRASSpec_NoQueries_BackwardCompat(t *testing.T) {
+	ras := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"spec": map[string]interface{}{
+				"scalingInterval": 180,
+				"backend":         "sglang-oai",
+				"pattern": map[string]interface{}{
+					"pdDisaggregated": map[string]interface{}{
+						"prefill": map[string]interface{}{
+							"roleName":    "prefill",
+							"maxReplicas": int64(10),
+							"minReplicas": int64(1),
+						},
+						"decode": map[string]interface{}{
+							"roleName":    "decode",
+							"maxReplicas": int64(10),
+							"minReplicas": int64(1),
+						},
+					},
+				},
+				"implementation": map[string]interface{}{
+					"dynamoPlanner": map[string]interface{}{
+						"modelName": "Qwen",
+						"sla": map[string]interface{}{
+							"ttft": 200.0,
+							"itl":  20.0,
+						},
+						"metrics": map[string]interface{}{
+							"engine": "sglang",
+							"port":   int64(9091),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	r := &AutoScalerReconciler{}
+	spec, err := r.parseRASSpec(ras)
+	if err != nil {
+		t.Fatalf("parseRASSpec failed: %v", err)
+	}
+	if spec.metricEngine != "sglang" {
+		t.Errorf("expected metricEngine sglang, got %q", spec.metricEngine)
+	}
+	if spec.metricQueriesJSON != "" {
+		t.Errorf("expected empty metricQueriesJSON, got %q", spec.metricQueriesJSON)
+	}
+}
+
+func TestParseRASSpec_MetricQueries_GoldenFixture(t *testing.T) {
+	goldenPath := "../../python/planner/tests/fixtures/metric_config_golden.json"
+	expected, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("failed to read golden fixture: %v", err)
+	}
+
+	ras := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"spec": map[string]interface{}{
+				"scalingInterval": 180,
+				"backend":         "sglang-oai",
+				"pattern": map[string]interface{}{
+					"pdDisaggregated": map[string]interface{}{
+						"prefill": map[string]interface{}{
+							"roleName":    "prefill",
+							"maxReplicas": int64(10),
+							"minReplicas": int64(1),
+						},
+						"decode": map[string]interface{}{
+							"roleName":    "decode",
+							"maxReplicas": int64(10),
+							"minReplicas": int64(1),
+						},
+					},
+				},
+				"implementation": map[string]interface{}{
+					"dynamoPlanner": map[string]interface{}{
+						"modelName": "Qwen",
+						"sla": map[string]interface{}{
+							"ttft": 200.0,
+							"itl":  20.0,
+						},
+						"metrics": map[string]interface{}{
+							"engine": "sglang",
+							"port":   int64(9091),
+							"queries": map[string]interface{}{
+								"ttft": "sum(rate(custom_ttft_seconds{modelFilter}[{interval}]))",
+								"isl":  "sum(increase(custom_prompt_tokens{modelFilter}[{interval}])) / sum(increase(custom_requests{modelFilter}[{interval}]))",
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	r := &AutoScalerReconciler{}
+	spec, err := r.parseRASSpec(ras)
+	if err != nil {
+		t.Fatalf("parseRASSpec failed: %v", err)
+	}
+
+	var got, want map[string]interface{}
+	if err := json.Unmarshal([]byte(spec.metricQueriesJSON), &got); err != nil {
+		t.Fatalf("failed to unmarshal metricQueriesJSON: %v", err)
+	}
+	if err := json.Unmarshal(expected, &want); err != nil {
+		t.Fatalf("failed to unmarshal golden fixture: %v", err)
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("metricQueriesJSON does not match golden fixture\n got: %s\n want: %s", spec.metricQueriesJSON, string(expected))
 	}
 }
 

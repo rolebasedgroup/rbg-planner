@@ -221,13 +221,13 @@ spec:
                               Endpoint overrides the operator-level Prometheus query endpoint
                               for this AutoScaler's planner.
                             type: string
-                          metricSource:
+                          engine:
                             default: sglang
-                            description: MetricSource selects the metric source type.
-                            enum:
-                            - sglang
-                            - vllm
-                            - patio
+                            description: |-
+                              Engine selects the inference engine preset that provides built-in
+                              Prometheus queries. Built-in: sglang, vllm, dynamo, patio. Any other
+                              value is a custom engine whose queries must be fully specified in
+                              spec.metrics.queries.
                             type: string
                           port:
                             default: 9091
@@ -237,6 +237,21 @@ spec:
                             maximum: 65535
                             minimum: 1
                             type: integer
+                          queries:
+                            additionalProperties:
+                              type: string
+                            description: |-
+                              Queries overrides the built-in Prometheus queries for the selected
+                              engine, keyed by logical metric slot: ttft, itl, requestsTotal,
+                              requestDuration, isl, osl. Each value is a complete PromQL
+                              expression. Slots omitted here fall back to the engine's built-in
+                              queries; a custom engine must provide all six.
+                            type: object
+                            x-kubernetes-validations:
+                            - message: 'query keys must be one of: ttft, itl, requestsTotal,
+                                requestDuration, isl, osl'
+                              rule: self.all(key, key in ['ttft', 'itl', 'requestsTotal',
+                                'requestDuration', 'isl', 'osl'])
                         type: object
                       modelName:
                         description: ModelName is the model name used for Prometheus

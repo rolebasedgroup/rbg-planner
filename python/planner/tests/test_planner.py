@@ -184,3 +184,22 @@ class TestPlannerMakeAdjustments:
         assert target_replicas[1].role_name == "decode"
         assert target_replicas[0].desired_replicas >= 1
         assert target_replicas[1].desired_replicas >= 1
+
+
+class TestMetricQueriesJsonParsing:
+    def test_invalid_json_uses_defaults(self, config, mock_interpolators):
+        config.metric_queries_json = "{invalid json"
+        planner = Planner(config)
+        # Invalid JSON is ignored; adapter uses built-in sglang presets.
+        assert "sglang:time_to_first_token_seconds_sum" in planner.metrics_client.queries["ttft"]
+
+    def test_non_dict_json_uses_defaults(self, config, mock_interpolators):
+        config.metric_queries_json = "[]"
+        planner = Planner(config)
+        # Non-dict JSON is ignored; adapter uses built-in sglang presets.
+        assert "sglang:time_to_first_token_seconds_sum" in planner.metrics_client.queries["ttft"]
+
+    def test_valid_json_override_applied(self, config, mock_interpolators):
+        config.metric_queries_json = '{"ttft":"custom_ttft"}'
+        planner = Planner(config)
+        assert planner.metrics_client.queries["ttft"] == "custom_ttft"
