@@ -9,9 +9,9 @@ spec:
 
   # Scaling pattern
   pattern:
-    # PDDisaggregated: Prefill/Decode disaggregated scaling (supported)
-    # Unified: Unified scaling (reserved, not yet implemented)
-    PDDisaggregated:
+    # pdDisaggregated: Prefill/Decode disaggregated scaling (supported)
+    # unified: Unified scaling (reserved, not yet implemented)
+    pdDisaggregated:
       prefill:
         roleName: prefill
         maxReplicas: 10
@@ -23,13 +23,14 @@ spec:
 
   # Scaling engine type
   implementation:
-    # DynamoPlanner: SLA-based planner derived from NVIDIA Dynamo
-    DynamoPlanner:
+    # dynamoPlanner: SLA-based planner derived from NVIDIA Dynamo
+    dynamoPlanner:
       modelName: "Qwen/Qwen3-0.6B"
 
       # SLA targets
-      ttft: 200.0             # target TTFT in milliseconds
-      itl: 20.0               # target ITL in milliseconds
+      sla:
+        ttft: 200.0             # target TTFT in milliseconds
+        itl: 20.0               # target ITL in milliseconds
 
       # Load prediction
       loadPredictor: arima       # arima | constant | prophet
@@ -41,17 +42,21 @@ spec:
       # Dry-run mode
       dryRun: false              # observe only, no actual scaling
 
+      # Private registry credentials (applied to both profiling Job and planner Deployment)
+      imagePullSecrets:
+        - name: regcred          # Kubernetes secret for pulling images from private registries
+
       profiling:
         image: "ghcr.io/rolebasedgroup/rbg-profiler:latest"
-        # ModelCache mounts a PVC with pre-downloaded model weights and
+        # modelSource mounts a PVC with pre-downloaded model weights and
         # tokenizer files. When omitted, the profiler falls back to
         # downloading the tokenizer from HuggingFace using modelName.
-        modelCache:
+        modelSource:
           pvcName: "model-weights"
           modelPath: "deepseek-r1"
-          mountPath: "/opt/model-cache"
+          mountPath: "/opt/model"
 
       # Metrics configuration
-      metricsEndpoint:
+      metrics:
         metricSource: sglang
         port: 9091

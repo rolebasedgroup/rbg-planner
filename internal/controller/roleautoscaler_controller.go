@@ -242,6 +242,7 @@ type parsedSpec struct {
 	modelCachePVCName   string
 	modelCacheModelPath string
 	modelCacheMountPath string
+	imagePullSecrets    []corev1.LocalObjectReference
 }
 
 func (r *AutoScalerReconciler) parseRASSpec(ras *unstructured.Unstructured) (*parsedSpec, error) {
@@ -255,11 +256,11 @@ func (r *AutoScalerReconciler) parseRASSpec(ras *unstructured.Unstructured) (*pa
 	}
 	s.backend = getStrField(spec, "backend", "sglang-oai")
 
-	// pattern.PDDisaggregated
+	// pattern.pdDisaggregated
 	po, _ := spec["pattern"].(map[string]interface{})
-	pd, _ := po["PDDisaggregated"].(map[string]interface{})
+	pd, _ := po["pdDisaggregated"].(map[string]interface{})
 	if pd == nil {
-		return nil, fmt.Errorf("pattern.PDDisaggregated is required")
+		return nil, fmt.Errorf("pattern.pdDisaggregated is required")
 	}
 	prefill, _ := pd["prefill"].(map[string]interface{})
 	decode, _ := pd["decode"].(map[string]interface{})
@@ -270,23 +271,36 @@ func (r *AutoScalerReconciler) parseRASSpec(ras *unstructured.Unstructured) (*pa
 	s.decodeMinReplicas = int32(getIntField(decode, "minReplicas", 1))
 	s.decodeMaxReplicas = int32(getIntField(decode, "maxReplicas", 1))
 
-	// implementation.DynamoPlanner
+	// implementation.dynamoPlanner
 	se, _ := spec["implementation"].(map[string]interface{})
-	dp, _ := se["DynamoPlanner"].(map[string]interface{})
+	dp, _ := se["dynamoPlanner"].(map[string]interface{})
 	if dp == nil {
-		return nil, fmt.Errorf("implementation.DynamoPlanner is required")
+		return nil, fmt.Errorf("implementation.dynamoPlanner is required")
 	}
 	s.plannerImage = r.PlannerImage
 	if s.plannerImage == "" {
 		s.plannerImage = defaultPlannerImage
 	}
 	s.modelName = getStrField(dp, "modelName", "")
-	s.ttft = getFloatField(dp, "ttft", 500.0)
-	s.itl = getFloatField(dp, "itl", 50.0)
+	// sla
+	slaMap, _ := dp["sla"].(map[string]interface{})
+	s.ttft = getFloatField(slaMap, "ttft", 500.0)
+	s.itl = getFloatField(slaMap, "itl", 50.0)
 	s.loadPredictor = getStrField(dp, "loadPredictor", "arima")
 	s.predictionWindow = getIntField(dp, "predictionWindow", 50)
 	s.noCorrection = getBoolField(dp, "noCorrection")
 	s.dryRun = getBoolField(dp, "dryRun")
+
+	// imagePullSecrets
+	if ips, ok := dp["imagePullSecrets"].([]interface{}); ok {
+		for _, item := range ips {
+			if m, ok := item.(map[string]interface{}); ok {
+				if name, ok := m["name"].(string); ok {
+					s.imagePullSecrets = append(s.imagePullSecrets, corev1.LocalObjectReference{Name: name})
+				}
+			}
+		}
+	}
 
 	// profiling
 	prof, _ := dp["profiling"].(map[string]interface{})
@@ -296,15 +310,15 @@ func (r *AutoScalerReconciler) parseRASSpec(ras *unstructured.Unstructured) (*pa
 	}
 	s.profilingImage = getStrField(prof, "image", profilerDefault)
 
-	// modelCache
-	if mc, ok := prof["modelCache"].(map[string]interface{}); ok && mc != nil {
+	// modelSource
+	if mc, ok := prof["modelSource"].(map[string]interface{}); ok && mc != nil {
 		s.modelCachePVCName = getStrField(mc, "pvcName", "")
 		s.modelCacheModelPath = getStrField(mc, "modelPath", "")
-		s.modelCacheMountPath = getStrField(mc, "mountPath", "/opt/model-cache")
+		s.modelCacheMountPath = getStrField(mc, "mountPath", "/opt/model")
 	}
 
-	// metricsEndpoint
-	me, _ := dp["metricsEndpoint"].(map[string]interface{})
+	// metrics
+	me, _ := dp["metrics"].(map[string]interface{})
 	s.metricSource = getStrField(me, "metricSource", "")
 	s.metricsPort = getIntField(me, "port", 9091)
 
@@ -488,14 +502,14 @@ func (r *AutoScalerReconciler) handleProfiling(ctx context.Context, ras *unstruc
 }
 
 // buildProfilingVolumes constructs PVC volume, volume mount, and tokenizer
-// path from the ModelCache spec fields. Returns empty values when pvcName
+// path from the ModelSource spec fields. Returns empty values when pvcName
 // is empty.
 func buildProfilingVolumes(pvcName, modelPath, mountPath string) (volumes []corev1.Volume, volumeMounts []corev1.VolumeMount, tokenizerPath string) {
 	if pvcName == "" {
 		return nil, nil, ""
 	}
 	if mountPath == "" {
-		mountPath = "/opt/model-cache"
+		mountPath = "/opt/model"
 	}
 	volumes = []corev1.Volume{
 		{
@@ -565,6 +579,7 @@ func (r *AutoScalerReconciler) createProfilingJob(ctx context.Context, ras *unst
 				Spec: corev1.PodSpec{
 					ServiceAccountName: saName,
 					RestartPolicy:      corev1.RestartPolicyNever,
+					ImagePullSecrets:   spec.imagePullSecrets,
 					Volumes:            volumes,
 					Containers: []corev1.Container{
 						{
@@ -618,6 +633,7 @@ func (r *AutoScalerReconciler) ensurePlannerDeployment(ctx context.Context, ras 
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: saName,
+					ImagePullSecrets:   spec.imagePullSecrets,
 					Containers: []corev1.Container{
 						{
 							Name:  "planner",

@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -47,12 +48,12 @@ type AutoScalerSpec struct {
 type Pattern struct {
 	// PDDisaggregated configures Prefill/Decode disaggregated scaling.
 	// +optional
-	PDDisaggregated *PDDisaggregatedPattern `json:"PDDisaggregated,omitempty"`
+	PDDisaggregated *PDDisaggregatedPattern `json:"pdDisaggregated,omitempty"`
 
 	// Unified configures unified (non-disaggregated) scaling.
 	// Reserved for future use.
 	// +optional
-	Unified *UnifiedPattern `json:"Unified,omitempty"`
+	Unified *UnifiedPattern `json:"unified,omitempty"`
 }
 
 // PDDisaggregatedPattern defines scaling for Prefill/Decode disaggregated roles.
@@ -102,7 +103,7 @@ type UnifiedPattern struct {
 type Implementation struct {
 	// DynamoPlanner configures the Dynamo-derived SLA-based planner.
 	// +optional
-	DynamoPlanner *DynamoPlannerConfig `json:"DynamoPlanner,omitempty"`
+	DynamoPlanner *DynamoPlannerConfig `json:"dynamoPlanner,omitempty"`
 }
 
 // DynamoPlannerConfig defines configuration for the Dynamo planner engine.
@@ -112,15 +113,9 @@ type DynamoPlannerConfig struct {
 	// +kubebuilder:validation:MinLength=1
 	ModelName string `json:"modelName"`
 
-	// TTFT is the target Time to First Token SLA in milliseconds.
+	// SLA defines the target SLA thresholds.
 	// +optional
-	// +kubebuilder:default=500
-	TTFT *float64 `json:"ttft,omitempty"`
-
-	// ITL is the target Inter-Token Latency SLA in milliseconds.
-	// +optional
-	// +kubebuilder:default=50
-	ITL *float64 `json:"itl,omitempty"`
+	SLA *SLAConfig `json:"sla,omitempty"`
 
 	// LoadPredictor selects the load prediction algorithm.
 	// +optional
@@ -143,13 +138,34 @@ type DynamoPlannerConfig struct {
 	// +kubebuilder:default=false
 	DryRun *bool `json:"dryRun,omitempty"`
 
+	// ImagePullSecrets is a list of references to Kubernetes secrets used for
+	// pulling the profiling and planner images from private registries.
+	// Applied to both the profiling Job and planner Deployment PodSpecs.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
+
 	// Profiling configures automatic SLA profiling.
 	// +optional
 	Profiling *ProfilingConfig `json:"profiling,omitempty"`
 
-	// MetricsEndpoint configures the metrics collection endpoint.
+	// Metrics configures metrics collection and exposition.
 	// +optional
-	MetricsEndpoint *MetricsEndpointConfig `json:"metricsEndpoint,omitempty"`
+	Metrics *MetricsConfig `json:"metrics,omitempty"`
+}
+
+// SLAConfig defines SLA target thresholds for the planner.
+type SLAConfig struct {
+	// TTFT is the target Time to First Token SLA in milliseconds.
+	// +optional
+	// +kubebuilder:default=500
+	TTFT float64 `json:"ttft,omitempty"`
+
+	// ITL is the target Inter-Token Latency SLA in milliseconds.
+	// +optional
+	// +kubebuilder:default=50
+	ITL float64 `json:"itl,omitempty"`
 }
 
 // ProfilingConfig defines profiling Job configuration.
@@ -159,16 +175,16 @@ type ProfilingConfig struct {
 	// +optional
 	Image string `json:"image,omitempty"`
 
-	// ModelCache provides PVC configuration for the profiler to access
+	// ModelSource provides PVC configuration for the profiler to access
 	// model weights and tokenizer files. When provided, the operator mounts
 	// the PVC and passes the tokenizer path to the profiler via --tokenizer.
 	// +optional
-	ModelCache *ModelCacheSpec `json:"modelCache,omitempty"`
+	ModelSource *ModelSourceSpec `json:"modelSource,omitempty"`
 }
 
-// ModelCacheSpec references a PVC containing pre-downloaded model weights
+// ModelSourceSpec references a PVC containing pre-downloaded model weights
 // and tokenizer files for the profiling job.
-type ModelCacheSpec struct {
+type ModelSourceSpec struct {
 	// PVCName is the name of the PersistentVolumeClaim containing model weights.
 	// The PVC must exist in the same namespace as the AutoScaler.
 	// +optional
@@ -184,12 +200,12 @@ type ModelCacheSpec struct {
 
 	// MountPath is the mount path for the PVC inside the profiler container.
 	// +optional
-	// +kubebuilder:default="/opt/model-cache"
+	// +kubebuilder:default="/opt/model"
 	MountPath string `json:"mountPath,omitempty"`
 }
 
-// MetricsEndpointConfig configures metrics collection.
-type MetricsEndpointConfig struct {
+// MetricsConfig configures metrics collection.
+type MetricsConfig struct {
 	// MetricSource selects the metric source type.
 	// +optional
 	// +kubebuilder:default="sglang"

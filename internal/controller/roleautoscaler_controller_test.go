@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	batchv1 "k8s.io/api/batch/v1"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -33,7 +34,7 @@ import (
 )
 
 func TestBuildProfilingVolumes_WithPVCAndRelativeModelPath(t *testing.T) {
-	volumes, mounts, tokenizer := buildProfilingVolumes("model-pvc", "deepseek-r1", "/opt/model-cache")
+	volumes, mounts, tokenizer := buildProfilingVolumes("model-pvc", "deepseek-r1", "/opt/model")
 
 	if len(volumes) != 1 {
 		t.Fatalf("expected 1 volume, got %d", len(volumes))
@@ -48,20 +49,20 @@ func TestBuildProfilingVolumes_WithPVCAndRelativeModelPath(t *testing.T) {
 	if len(mounts) != 1 {
 		t.Fatalf("expected 1 mount, got %d", len(mounts))
 	}
-	if mounts[0].MountPath != "/opt/model-cache" {
-		t.Errorf("expected mount path '/opt/model-cache', got %q", mounts[0].MountPath)
+	if mounts[0].MountPath != "/opt/model" {
+		t.Errorf("expected mount path '/opt/model', got %q", mounts[0].MountPath)
 	}
 	if !mounts[0].ReadOnly {
 		t.Error("expected ReadOnly mount")
 	}
 
-	if tokenizer != "/opt/model-cache/deepseek-r1" {
-		t.Errorf("expected tokenizer '/opt/model-cache/deepseek-r1', got %q", tokenizer)
+	if tokenizer != "/opt/model/deepseek-r1" {
+		t.Errorf("expected tokenizer '/opt/model/deepseek-r1', got %q", tokenizer)
 	}
 }
 
 func TestBuildProfilingVolumes_WithAbsoluteModelPath(t *testing.T) {
-	_, _, tokenizer := buildProfilingVolumes("model-pvc", "/abs/path/model", "/opt/model-cache")
+	_, _, tokenizer := buildProfilingVolumes("model-pvc", "/abs/path/model", "/opt/model")
 
 	if tokenizer != "/abs/path/model" {
 		t.Errorf("expected tokenizer '/abs/path/model', got %q", tokenizer)
@@ -69,7 +70,7 @@ func TestBuildProfilingVolumes_WithAbsoluteModelPath(t *testing.T) {
 }
 
 func TestBuildProfilingVolumes_WithoutPVCName(t *testing.T) {
-	volumes, mounts, tokenizer := buildProfilingVolumes("", "deepseek-r1", "/opt/model-cache")
+	volumes, mounts, tokenizer := buildProfilingVolumes("", "deepseek-r1", "/opt/model")
 
 	if len(volumes) != 0 {
 		t.Errorf("expected 0 volumes, got %d", len(volumes))
@@ -83,7 +84,7 @@ func TestBuildProfilingVolumes_WithoutPVCName(t *testing.T) {
 }
 
 func TestBuildProfilingVolumes_WithoutModelPath(t *testing.T) {
-	volumes, mounts, tokenizer := buildProfilingVolumes("model-pvc", "", "/opt/model-cache")
+	volumes, mounts, tokenizer := buildProfilingVolumes("model-pvc", "", "/opt/model")
 
 	if len(volumes) != 1 {
 		t.Fatalf("expected 1 volume (PVC still mounted), got %d", len(volumes))
@@ -99,8 +100,8 @@ func TestBuildProfilingVolumes_WithoutModelPath(t *testing.T) {
 func TestBuildProfilingVolumes_DefaultMountPath(t *testing.T) {
 	_, mounts, _ := buildProfilingVolumes("model-pvc", "model", "")
 
-	if mounts[0].MountPath != "/opt/model-cache" {
-		t.Errorf("expected default mount path '/opt/model-cache', got %q", mounts[0].MountPath)
+	if mounts[0].MountPath != "/opt/model" {
+		t.Errorf("expected default mount path '/opt/model', got %q", mounts[0].MountPath)
 	}
 }
 
@@ -564,5 +565,145 @@ func TestCleanupClusterResources_NothingToCleanUp(t *testing.T) {
 
 	if err := r.cleanupClusterResources(context.Background(), ras); err != nil {
 		t.Fatalf("expected nil error, got: %v", err)
+	}
+}
+
+func TestParseRASSpec_ImagePullSecrets(t *testing.T) {
+	ras := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"spec": map[string]interface{}{
+				"scalingInterval": 180,
+				"backend":         "sglang-oai",
+				"pattern": map[string]interface{}{
+					"pdDisaggregated": map[string]interface{}{
+						"prefill": map[string]interface{}{
+							"roleName":    "prefill",
+							"maxReplicas": int64(10),
+							"minReplicas": int64(1),
+						},
+						"decode": map[string]interface{}{
+							"roleName":    "decode",
+							"maxReplicas": int64(10),
+							"minReplicas": int64(1),
+						},
+					},
+				},
+				"implementation": map[string]interface{}{
+					"dynamoPlanner": map[string]interface{}{
+						"modelName": "Qwen",
+						"sla": map[string]interface{}{
+							"ttft": 200.0,
+							"itl":  20.0,
+						},
+						"imagePullSecrets": []interface{}{
+							map[string]interface{}{"name": "regcred"},
+							map[string]interface{}{"name": "ghcr-secret"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	r := &AutoScalerReconciler{}
+	spec, err := r.parseRASSpec(ras)
+	if err != nil {
+		t.Fatalf("parseRASSpec failed: %v", err)
+	}
+	if len(spec.imagePullSecrets) != 2 {
+		t.Fatalf("expected 2 imagePullSecrets, got %d", len(spec.imagePullSecrets))
+	}
+	if spec.imagePullSecrets[0].Name != "regcred" {
+		t.Errorf("expected first secret 'regcred', got %q", spec.imagePullSecrets[0].Name)
+	}
+	if spec.imagePullSecrets[1].Name != "ghcr-secret" {
+		t.Errorf("expected second secret 'ghcr-secret', got %q", spec.imagePullSecrets[1].Name)
+	}
+}
+
+func TestCreateProfilingJob_SetsImagePullSecrets(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := batchv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add batch scheme: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add core scheme: %v", err)
+	}
+
+	ras := &unstructured.Unstructured{}
+	ras.SetName("test-rbg")
+	ras.SetNamespace("test-ns")
+	ras.SetUID("test-uid")
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &AutoScalerReconciler{Client: cl, Scheme: scheme}
+
+	spec := &parsedSpec{
+		profilingImage: "ghcr.io/rolebasedgroup/rbg-profiler:latest",
+		backend:        "sglang-oai",
+		imagePullSecrets: []corev1.LocalObjectReference{
+			{Name: "regcred"},
+		},
+	}
+
+	err := r.createProfilingJob(context.Background(), ras, spec, "test-rbg-profiling", "test-rbg-profiling")
+	if err != nil {
+		t.Fatalf("createProfilingJob failed: %v", err)
+	}
+
+	created := &batchv1.Job{}
+	if err := cl.Get(context.Background(),
+		types.NamespacedName{Name: "test-rbg-profiling", Namespace: "test-ns"}, created); err != nil {
+		t.Fatalf("failed to get created job: %v", err)
+	}
+
+	if len(created.Spec.Template.Spec.ImagePullSecrets) != 1 {
+		t.Fatalf("expected 1 imagePullSecret, got %d", len(created.Spec.Template.Spec.ImagePullSecrets))
+	}
+	if created.Spec.Template.Spec.ImagePullSecrets[0].Name != "regcred" {
+		t.Errorf("expected 'regcred', got %q", created.Spec.Template.Spec.ImagePullSecrets[0].Name)
+	}
+}
+
+func TestEnsurePlannerDeployment_SetsImagePullSecrets(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add apps scheme: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add core scheme: %v", err)
+	}
+
+	ras := &unstructured.Unstructured{}
+	ras.SetName("test-rbg")
+	ras.SetNamespace("test-ns")
+	ras.SetUID("test-uid")
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &AutoScalerReconciler{Client: cl, Scheme: scheme}
+
+	spec := &parsedSpec{
+		plannerImage: "ghcr.io/rolebasedgroup/rbg-planner:latest",
+		imagePullSecrets: []corev1.LocalObjectReference{
+			{Name: "regcred"},
+		},
+	}
+
+	err := r.ensurePlannerDeployment(context.Background(), ras, spec, "test-profiling-cm", 1, 1)
+	if err != nil {
+		t.Fatalf("ensurePlannerDeployment failed: %v", err)
+	}
+
+	created := &appsv1.Deployment{}
+	if err := cl.Get(context.Background(),
+		types.NamespacedName{Name: "test-rbg-planner", Namespace: "test-ns"}, created); err != nil {
+		t.Fatalf("failed to get created deployment: %v", err)
+	}
+
+	if len(created.Spec.Template.Spec.ImagePullSecrets) != 1 {
+		t.Fatalf("expected 1 imagePullSecret, got %d", len(created.Spec.Template.Spec.ImagePullSecrets))
+	}
+	if created.Spec.Template.Spec.ImagePullSecrets[0].Name != "regcred" {
+		t.Errorf("expected 'regcred', got %q", created.Spec.Template.Spec.ImagePullSecrets[0].Name)
 	}
 }

@@ -71,7 +71,7 @@ spec:
               implementation:
                 description: Implementation defines the scaling engine and its configuration.
                 properties:
-                  DynamoPlanner:
+                  dynamoPlanner:
                     description: DynamoPlanner configures the Dynamo-derived SLA-based
                       planner.
                     properties:
@@ -80,11 +80,31 @@ spec:
                         description: DryRun enables observe-only mode without actual
                           scaling.
                         type: boolean
-                      itl:
-                        default: 50
-                        description: ITL is the target Inter-Token Latency SLA in
-                          milliseconds.
-                        type: number
+                      imagePullSecrets:
+                        description: |-
+                          ImagePullSecrets is a list of references to Kubernetes secrets used for
+                          pulling the profiling and planner images from private registries.
+                          Applied to both the profiling Job and planner Deployment PodSpecs.
+                        items:
+                          description: |-
+                            LocalObjectReference contains enough information to let you locate the
+                            referenced object inside the same namespace.
+                          properties:
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
                       loadPredictor:
                         default: arima
                         description: LoadPredictor selects the load prediction algorithm.
@@ -93,9 +113,8 @@ spec:
                         - constant
                         - prophet
                         type: string
-                      metricsEndpoint:
-                        description: MetricsEndpoint configures the metrics collection
-                          endpoint.
+                      metrics:
+                        description: Metrics configures metrics collection and exposition.
                         properties:
                           metricSource:
                             default: sglang
@@ -137,9 +156,9 @@ spec:
                               Image is the container image for the profiling tool.
                               If empty, a default image is used.
                             type: string
-                          modelCache:
+                          modelSource:
                             description: |-
-                              ModelCache provides PVC configuration for the profiler to access
+                              ModelSource provides PVC configuration for the profiler to access
                               model weights and tokenizer files. When provided, the operator mounts
                               the PVC and passes the tokenizer path to the profiler via --tokenizer.
                             properties:
@@ -152,7 +171,7 @@ spec:
                                   leading slash to address the same path prefix within the PVC.
                                 type: string
                               mountPath:
-                                default: /opt/model-cache
+                                default: /opt/model
                                 description: MountPath is the mount path for the PVC
                                   inside the profiler container.
                                 type: string
@@ -163,11 +182,20 @@ spec:
                                 type: string
                             type: object
                         type: object
-                      ttft:
-                        default: 500
-                        description: TTFT is the target Time to First Token SLA in
-                          milliseconds.
-                        type: number
+                      sla:
+                        description: SLA defines the target SLA thresholds.
+                        properties:
+                          itl:
+                            default: 50
+                            description: ITL is the target Inter-Token Latency SLA
+                              in milliseconds.
+                            type: number
+                          ttft:
+                            default: 500
+                            description: TTFT is the target Time to First Token SLA
+                              in milliseconds.
+                            type: number
+                        type: object
                     required:
                     - modelName
                     type: object
@@ -175,7 +203,7 @@ spec:
               pattern:
                 description: Pattern defines the scaling pattern and per-role configuration.
                 properties:
-                  PDDisaggregated:
+                  pdDisaggregated:
                     description: PDDisaggregated configures Prefill/Decode disaggregated
                       scaling.
                     properties:
@@ -235,7 +263,7 @@ spec:
                     - decode
                     - prefill
                     type: object
-                  Unified:
+                  unified:
                     description: |-
                       Unified configures unified (non-disaggregated) scaling.
                       Reserved for future use.
