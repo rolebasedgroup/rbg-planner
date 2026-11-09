@@ -55,8 +55,12 @@ class PrefillInterpolator:
 
         import scipy.interpolate
 
-        self.ttft_interpolator = scipy.interpolate.interp1d(self.prefill_isl, self.prefill_ttft, kind="cubic")
-        self.thpt_interpolator = scipy.interpolate.interp1d(self.prefill_isl, self.prefill_thpt_per_gpu, kind="cubic")
+        # interp1d with kind="cubic" requires at least 4 data points;
+        # fall back to lower-order interpolation when fewer are available.
+        kind = min(len(self.prefill_isl) - 1, 3)
+
+        self.ttft_interpolator = scipy.interpolate.interp1d(self.prefill_isl, self.prefill_ttft, kind=kind)
+        self.thpt_interpolator = scipy.interpolate.interp1d(self.prefill_isl, self.prefill_thpt_per_gpu, kind=kind)
 
     def interpolate_ttft(self, isl: float) -> float:
         isl = max(self.min_isl, min(isl, self.max_isl))

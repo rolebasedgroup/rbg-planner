@@ -61,22 +61,50 @@ spec:
           spec:
             description: AutoScalerSpec defines the desired state of AutoScaler.
             properties:
+              backend:
+                default: sglang-oai
+                description: |-
+                  Backend selects the inference engine backend for both profiling (bench)
+                  and online metrics collection. Examples: "sglang-oai", "vllm", "vllm-chat".
+                  When empty, defaults to "sglang-oai".
+                type: string
               implementation:
                 description: Implementation defines the scaling engine and its configuration.
                 properties:
-                  DynamoPlanner:
+                  dynamoPlanner:
                     description: DynamoPlanner configures the Dynamo-derived SLA-based
                       planner.
                     properties:
                       dryRun:
+                        default: false
                         description: DryRun enables observe-only mode without actual
                           scaling.
                         type: boolean
-                      itl:
-                        default: 50
-                        description: ITL is the target Inter-Token Latency SLA in
-                          milliseconds.
-                        type: number
+                      imagePullSecrets:
+                        description: |-
+                          ImagePullSecrets is a list of references to Kubernetes secrets used for
+                          pulling the profiling and planner images from private registries.
+                          Applied to both the profiling Job and planner Deployment PodSpecs.
+                        items:
+                          description: |-
+                            LocalObjectReference contains enough information to let you locate the
+                            referenced object inside the same namespace.
+                          properties:
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        type: array
+                        x-kubernetes-list-map-keys:
+                        - name
+                        x-kubernetes-list-type: map
                       loadPredictor:
                         default: arima
                         description: LoadPredictor selects the load prediction algorithm.
@@ -85,10 +113,114 @@ spec:
                         - constant
                         - prophet
                         type: string
-                      metricsEndpoint:
-                        description: MetricsEndpoint configures the metrics collection
-                          endpoint.
+                      metrics:
+                        description: Metrics configures metrics collection and exposition.
                         properties:
+                          authentication:
+                            description: |-
+                              Authentication configures credentials for the Prometheus query
+                              endpoint, grouped by mechanism. At most one mechanism may be set.
+                            properties:
+                              basicAuth:
+                                description: |-
+                                  BasicAuth configures HTTP Basic authentication, following the
+                                  prometheus-operator SecretKeySelector convention.
+                                properties:
+                                  password:
+                                    description: Password selects the Secret key holding
+                                      the password.
+                                    properties:
+                                      key:
+                                        description: The key of the secret to select
+                                          from.  Must be a valid secret key.
+                                        type: string
+                                      name:
+                                        default: ""
+                                        description: |-
+                                          Name of the referent.
+                                          This field is effectively required, but due to backwards compatibility is
+                                          allowed to be empty. Instances of this type with an empty value here are
+                                          almost certainly wrong.
+                                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                        type: string
+                                      optional:
+                                        description: Specify whether the Secret or
+                                          its key must be defined
+                                        type: boolean
+                                    required:
+                                    - key
+                                    type: object
+                                    x-kubernetes-map-type: atomic
+                                  username:
+                                    description: Username selects the Secret key holding
+                                      the username.
+                                    properties:
+                                      key:
+                                        description: The key of the secret to select
+                                          from.  Must be a valid secret key.
+                                        type: string
+                                      name:
+                                        default: ""
+                                        description: |-
+                                          Name of the referent.
+                                          This field is effectively required, but due to backwards compatibility is
+                                          allowed to be empty. Instances of this type with an empty value here are
+                                          almost certainly wrong.
+                                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                        type: string
+                                      optional:
+                                        description: Specify whether the Secret or
+                                          its key must be defined
+                                        type: boolean
+                                    required:
+                                    - key
+                                    type: object
+                                    x-kubernetes-map-type: atomic
+                                required:
+                                - password
+                                - username
+                                type: object
+                              bearer:
+                                description: Bearer configures bearer token authentication.
+                                properties:
+                                  token:
+                                    description: |-
+                                      Token selects the Secret key holding the bearer token sent as
+                                      `Authorization: Bearer <token>`.
+                                    properties:
+                                      key:
+                                        description: The key of the secret to select
+                                          from.  Must be a valid secret key.
+                                        type: string
+                                      name:
+                                        default: ""
+                                        description: |-
+                                          Name of the referent.
+                                          This field is effectively required, but due to backwards compatibility is
+                                          allowed to be empty. Instances of this type with an empty value here are
+                                          almost certainly wrong.
+                                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                        type: string
+                                      optional:
+                                        description: Specify whether the Secret or
+                                          its key must be defined
+                                        type: boolean
+                                    required:
+                                    - key
+                                    type: object
+                                    x-kubernetes-map-type: atomic
+                                required:
+                                - token
+                                type: object
+                            type: object
+                            x-kubernetes-validations:
+                            - message: basicAuth and bearer are mutually exclusive
+                              rule: '!(has(self.basicAuth) && has(self.bearer))'
+                          endpoint:
+                            description: |-
+                              Endpoint overrides the operator-level Prometheus query endpoint
+                              for this AutoScaler's planner.
+                            type: string
                           metricSource:
                             default: sglang
                             description: MetricSource selects the metric source type.
@@ -101,19 +233,25 @@ spec:
                             default: 9091
                             description: Port is the port for planner's own Prometheus
                               metrics exposition.
+                            format: int32
+                            maximum: 65535
+                            minimum: 1
                             type: integer
                         type: object
                       modelName:
                         description: ModelName is the model name used for Prometheus
                           label filtering.
+                        minLength: 1
                         type: string
                       noCorrection:
+                        default: false
                         description: NoCorrection disables SLA correction factors.
                         type: boolean
                       predictionWindow:
                         default: 50
                         description: PredictionWindow is the number of data points
                           in the predictor window.
+                        format: int32
                         type: integer
                       profiling:
                         description: Profiling configures automatic SLA profiling.
@@ -123,18 +261,68 @@ spec:
                               Image is the container image for the profiling tool.
                               If empty, a default image is used.
                             type: string
+                          inputFormat:
+                            default: auto
+                            description: |-
+                              InputFormat selects the prompt input form used by profiling bench
+                              requests. "text" sends tokenizer-decoded prompt strings (required by
+                              routers such as SMG that only accept string prompts), "token_ids" sends
+                              token ID arrays, and "auto" (default) lets the bench backend choose its
+                              preferred form (token_ids for completions backends, text for chat
+                              backends).
+                            enum:
+                            - auto
+                            - text
+                            - token_ids
+                            type: string
+                          modelSource:
+                            description: |-
+                              ModelSource provides PVC configuration for the profiler to access
+                              model weights and tokenizer files. When provided, the operator mounts
+                              the PVC and passes the tokenizer path to the profiler via --tokenizer.
+                            properties:
+                              modelPath:
+                                description: |-
+                                  ModelPath is the path to the model/tokenizer directory within the PVC
+                                  (e.g. "deepseek-r1" or "models/Llama-3.1-405B"). May also be a
+                                  container-visible absolute path already under MountPath. Such an absolute
+                                  path is interpreted as container-visible; use the relative form without a
+                                  leading slash to address the same path prefix within the PVC.
+                                type: string
+                              mountPath:
+                                default: /opt/model
+                                description: MountPath is the mount path for the PVC
+                                  inside the profiler container.
+                                type: string
+                              pvcName:
+                                description: |-
+                                  PVCName is the name of the PersistentVolumeClaim containing model weights.
+                                  The PVC must exist in the same namespace as the AutoScaler.
+                                type: string
+                            type: object
                         type: object
-                      ttft:
-                        default: 500
-                        description: TTFT is the target Time to First Token SLA in
-                          milliseconds.
-                        type: number
+                      sla:
+                        description: SLA defines the target SLA thresholds.
+                        properties:
+                          itl:
+                            default: 50
+                            description: ITL is the target Inter-Token Latency SLA
+                              in milliseconds.
+                            type: number
+                          ttft:
+                            default: 500
+                            description: TTFT is the target Time to First Token SLA
+                              in milliseconds.
+                            type: number
+                        type: object
+                    required:
+                    - modelName
                     type: object
                 type: object
               pattern:
                 description: Pattern defines the scaling pattern and per-role configuration.
                 properties:
-                  PDDisaggregated:
+                  pdDisaggregated:
                     description: PDDisaggregated configures Prefill/Decode disaggregated
                       scaling.
                     properties:
@@ -155,14 +343,15 @@ spec:
                             minimum: 1
                             type: integer
                           roleName:
-                            default: prefill
                             description: RoleName is the name of the role in the RoleBasedGroup.
                             type: string
                         required:
                         - maxReplicas
-                        - minReplicas
                         - roleName
                         type: object
+                        x-kubernetes-validations:
+                        - message: minReplicas must not exceed maxReplicas
+                          rule: '!has(self.minReplicas) || self.minReplicas <= self.maxReplicas'
                       prefill:
                         description: Prefill defines the prefill role scaling configuration.
                         properties:
@@ -180,19 +369,20 @@ spec:
                             minimum: 1
                             type: integer
                           roleName:
-                            default: prefill
                             description: RoleName is the name of the role in the RoleBasedGroup.
                             type: string
                         required:
                         - maxReplicas
-                        - minReplicas
                         - roleName
                         type: object
+                        x-kubernetes-validations:
+                        - message: minReplicas must not exceed maxReplicas
+                          rule: '!has(self.minReplicas) || self.minReplicas <= self.maxReplicas'
                     required:
                     - decode
                     - prefill
                     type: object
-                  Unified:
+                  unified:
                     description: |-
                       Unified configures unified (non-disaggregated) scaling.
                       Reserved for future use.
@@ -213,14 +403,18 @@ spec:
                         type: string
                     required:
                     - maxReplicas
-                    - minReplicas
                     - roleName
                     type: object
+                    x-kubernetes-validations:
+                    - message: minReplicas must not exceed maxReplicas
+                      rule: '!has(self.minReplicas) || self.minReplicas <= self.maxReplicas'
                 type: object
               scalingInterval:
                 default: 180
                 description: ScalingInterval is the number of seconds between scaling
                   decisions.
+                format: int32
+                minimum: 1
                 type: integer
             required:
             - implementation
@@ -287,6 +481,9 @@ spec:
                   - type
                   type: object
                 type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
               decodeReplicas:
                 description: DecodeReplicas is the current decode replica count.
                 format: int32

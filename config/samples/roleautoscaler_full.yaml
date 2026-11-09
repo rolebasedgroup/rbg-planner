@@ -5,12 +5,13 @@ metadata:
   namespace: inference
 spec:
   scalingInterval: 180    # seconds between scaling decisions
+  backend: sglang-oai     # inference engine backend (bench + metrics)
 
   # Scaling pattern
   pattern:
-    # PDDisaggregated: Prefill/Decode disaggregated scaling (supported)
-    # Unified: Unified scaling (reserved, not yet implemented)
-    PDDisaggregated:
+    # pdDisaggregated: Prefill/Decode disaggregated scaling (supported)
+    # unified: Unified scaling (reserved, not yet implemented)
+    pdDisaggregated:
       prefill:
         roleName: prefill
         maxReplicas: 10
@@ -22,13 +23,14 @@ spec:
 
   # Scaling engine type
   implementation:
-    # DynamoPlanner: SLA-based planner derived from NVIDIA Dynamo
-    DynamoPlanner:
+    # dynamoPlanner: SLA-based planner derived from NVIDIA Dynamo
+    dynamoPlanner:
       modelName: "Qwen/Qwen3-0.6B"
 
       # SLA targets
-      ttft: 200.0             # target TTFT in milliseconds
-      itl: 20.0               # target ITL in milliseconds
+      sla:
+        ttft: 200.0             # target TTFT in milliseconds
+        itl: 20.0               # target ITL in milliseconds
 
       # Load prediction
       loadPredictor: arima       # arima | constant | prophet
@@ -40,10 +42,42 @@ spec:
       # Dry-run mode
       dryRun: false              # observe only, no actual scaling
 
+      # Private registry credentials (applied to both profiling Job and planner Deployment)
+      imagePullSecrets:
+        - name: regcred          # Kubernetes secret for pulling images from private registries
+
       profiling:
         image: "ghcr.io/rolebasedgroup/rbg-profiler:latest"
+        # Prompt input form for bench requests: auto (backend default),
+        # text (decoded strings, required by routers such as SMG), or
+        # token_ids (raw token ID arrays).
+        inputFormat: "auto"
+        # modelSource mounts a PVC with pre-downloaded model weights and
+        # tokenizer files. When omitted, the profiler falls back to
+        # downloading the tokenizer from HuggingFace using modelName.
+        modelSource:
+          pvcName: "model-weights"
+          modelPath: "deepseek-r1"
+          mountPath: "/opt/model"
 
       # Metrics configuration
-      metricsEndpoint:
+      metrics:
         metricSource: sglang
         port: 9091
+        # Optional: override the operator-level Prometheus query endpoint.
+        # endpoint: https://sls-prometheus.example.com/prometheus/workspace
+        # Optional: credentials for the query endpoint, one mechanism only.
+        # authentication:
+        #   # HTTP Basic auth (prometheus-operator SecretKeySelector convention)
+        #   basicAuth:
+        #     username:
+        #       name: prometheus-auth
+        #       key: username
+        #     password:
+        #       name: prometheus-auth
+        #       key: password
+        #   # or bearer token
+        #   bearer:
+        #     token:
+        #       name: prometheus-auth
+        #       key: token

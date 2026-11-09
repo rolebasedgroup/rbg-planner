@@ -16,11 +16,11 @@ class SGLangAdapter(PrometheusAdapter):
     def __init__(self, url: str):
         super().__init__(url)
         self.metrics = MetricNames(
-            ttft="sglang_time_to_first_token_seconds",
-            itl="sglang_inter_token_latency_seconds",
-            request_duration="sglang_e2e_request_latency_seconds",
-            requests_total="sglang_num_requests_total",
-            prompt_tokens="sglang_prompt_tokens_total",
-            generation_tokens="sglang_generation_tokens_total",
+            ttft="sglang:time_to_first_token_seconds",
+            itl="sglang:inter_token_latency_seconds",
+            request_duration="sglang:e2e_request_latency_seconds",
+            requests_total="sglang:num_requests_total",
+            prompt_tokens="sglang:prompt_tokens_total",
+            generation_tokens="sglang:generation_tokens_total",
             model_label="model_name",
         )

@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -27,6 +28,13 @@ type AutoScalerSpec struct {
 	// +kubebuilder:default=180
 	// +kubebuilder:validation:Minimum=1
 	ScalingInterval *int32 `json:"scalingInterval,omitempty"`
+
+	// Backend selects the inference engine backend for both profiling (bench)
+	// and online metrics collection. Examples: "sglang-oai", "vllm", "vllm-chat".
+	// When empty, defaults to "sglang-oai".
+	// +optional
+	// +kubebuilder:default="sglang-oai"
+	Backend string `json:"backend,omitempty"`
 
 	// Pattern defines the scaling pattern and per-role configuration.
 	Pattern Pattern `json:"pattern"`
@@ -40,12 +48,12 @@ type AutoScalerSpec struct {
 type Pattern struct {
 	// PDDisaggregated configures Prefill/Decode disaggregated scaling.
 	// +optional
-	PDDisaggregated *PDDisaggregatedPattern `json:"PDDisaggregated,omitempty"`
+	PDDisaggregated *PDDisaggregatedPattern `json:"pdDisaggregated,omitempty"`
 
 	// Unified configures unified (non-disaggregated) scaling.
 	// Reserved for future use.
 	// +optional
-	Unified *UnifiedPattern `json:"Unified,omitempty"`
+	Unified *UnifiedPattern `json:"unified,omitempty"`
 }
 
 // PDDisaggregatedPattern defines scaling for Prefill/Decode disaggregated roles.
@@ -95,7 +103,7 @@ type UnifiedPattern struct {
 type Implementation struct {
 	// DynamoPlanner configures the Dynamo-derived SLA-based planner.
 	// +optional
-	DynamoPlanner *DynamoPlannerConfig `json:"DynamoPlanner,omitempty"`
+	DynamoPlanner *DynamoPlannerConfig `json:"dynamoPlanner,omitempty"`
 }
 
 // DynamoPlannerConfig defines configuration for the Dynamo planner engine.
@@ -105,15 +113,9 @@ type DynamoPlannerConfig struct {
 	// +kubebuilder:validation:MinLength=1
 	ModelName string `json:"modelName"`
 
-	// TTFT is the target Time to First Token SLA in milliseconds.
+	// SLA defines the target SLA thresholds.
 	// +optional
-	// +kubebuilder:default=500
-	TTFT *float64 `json:"ttft,omitempty"`
-
-	// ITL is the target Inter-Token Latency SLA in milliseconds.
-	// +optional
-	// +kubebuilder:default=50
-	ITL *float64 `json:"itl,omitempty"`
+	SLA *SLAConfig `json:"sla,omitempty"`
 
 	// LoadPredictor selects the load prediction algorithm.
 	// +optional
@@ -136,25 +138,85 @@ type DynamoPlannerConfig struct {
 	// +kubebuilder:default=false
 	DryRun *bool `json:"dryRun,omitempty"`
 
+	// ImagePullSecrets is a list of references to Kubernetes secrets used for
+	// pulling the profiling and planner images from private registries.
+	// Applied to both the profiling Job and planner Deployment PodSpecs.
+	// +optional
+	// +listType=map
+	// +listMapKey=name
+	ImagePullSecrets []corev1.LocalObjectReference `json:"imagePullSecrets,omitempty"`
+
 	// Profiling configures automatic SLA profiling.
 	// +optional
 	Profiling *ProfilingConfig `json:"profiling,omitempty"`
 
-	// MetricsEndpoint configures the metrics collection endpoint.
+	// Metrics configures metrics collection and exposition.
 	// +optional
-	MetricsEndpoint *MetricsEndpointConfig `json:"metricsEndpoint,omitempty"`
+	Metrics *MetricsConfig `json:"metrics,omitempty"`
+}
+
+// SLAConfig defines SLA target thresholds for the planner.
+type SLAConfig struct {
+	// TTFT is the target Time to First Token SLA in milliseconds.
+	// +optional
+	// +kubebuilder:default=500
+	TTFT float64 `json:"ttft,omitempty"`
+
+	// ITL is the target Inter-Token Latency SLA in milliseconds.
+	// +optional
+	// +kubebuilder:default=50
+	ITL float64 `json:"itl,omitempty"`
 }
 
 // ProfilingConfig defines profiling Job configuration.
 type ProfilingConfig struct {
+	// InputFormat selects the prompt input form used by profiling bench
+	// requests. "text" sends tokenizer-decoded prompt strings (required by
+	// routers such as SMG that only accept string prompts), "token_ids" sends
+	// token ID arrays, and "auto" (default) lets the bench backend choose its
+	// preferred form (token_ids for completions backends, text for chat
+	// backends).
+	// +optional
+	// +kubebuilder:default="auto"
+	// +kubebuilder:validation:Enum=auto;text;token_ids
+	InputFormat string `json:"inputFormat,omitempty"`
+
 	// Image is the container image for the profiling tool.
 	// If empty, a default image is used.
 	// +optional
 	Image string `json:"image,omitempty"`
+
+	// ModelSource provides PVC configuration for the profiler to access
+	// model weights and tokenizer files. When provided, the operator mounts
+	// the PVC and passes the tokenizer path to the profiler via --tokenizer.
+	// +optional
+	ModelSource *ModelSourceSpec `json:"modelSource,omitempty"`
 }
 
-// MetricsEndpointConfig configures metrics collection.
-type MetricsEndpointConfig struct {
+// ModelSourceSpec references a PVC containing pre-downloaded model weights
+// and tokenizer files for the profiling job.
+type ModelSourceSpec struct {
+	// PVCName is the name of the PersistentVolumeClaim containing model weights.
+	// The PVC must exist in the same namespace as the AutoScaler.
+	// +optional
+	PVCName string `json:"pvcName,omitempty"`
+
+	// ModelPath is the path to the model/tokenizer directory within the PVC
+	// (e.g. "deepseek-r1" or "models/Llama-3.1-405B"). May also be a
+	// container-visible absolute path already under MountPath. Such an absolute
+	// path is interpreted as container-visible; use the relative form without a
+	// leading slash to address the same path prefix within the PVC.
+	// +optional
+	ModelPath string `json:"modelPath,omitempty"`
+
+	// MountPath is the mount path for the PVC inside the profiler container.
+	// +optional
+	// +kubebuilder:default="/opt/model"
+	MountPath string `json:"mountPath,omitempty"`
+}
+
+// MetricsConfig configures metrics collection.
+type MetricsConfig struct {
 	// MetricSource selects the metric source type.
 	// +optional
 	// +kubebuilder:default="sglang"
@@ -167,6 +229,45 @@ type MetricsEndpointConfig struct {
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=65535
 	Port *int32 `json:"port,omitempty"`
+
+	// Endpoint overrides the operator-level Prometheus query endpoint
+	// for this AutoScaler's planner.
+	// +optional
+	Endpoint string `json:"endpoint,omitempty"`
+
+	// Authentication configures credentials for the Prometheus query
+	// endpoint, grouped by mechanism. At most one mechanism may be set.
+	// +optional
+	Authentication *AuthenticationConfig `json:"authentication,omitempty"`
+}
+
+// AuthenticationConfig groups Prometheus query credentials by mechanism.
+// +kubebuilder:validation:XValidation:rule="!(has(self.basicAuth) && has(self.bearer))",message="basicAuth and bearer are mutually exclusive"
+type AuthenticationConfig struct {
+	// BasicAuth configures HTTP Basic authentication, following the
+	// prometheus-operator SecretKeySelector convention.
+	// +optional
+	BasicAuth *BasicAuthConfig `json:"basicAuth,omitempty"`
+
+	// Bearer configures bearer token authentication.
+	// +optional
+	Bearer *BearerAuthConfig `json:"bearer,omitempty"`
+}
+
+// BasicAuthConfig holds HTTP Basic auth credentials sourced from Secrets.
+type BasicAuthConfig struct {
+	// Username selects the Secret key holding the username.
+	Username corev1.SecretKeySelector `json:"username"`
+
+	// Password selects the Secret key holding the password.
+	Password corev1.SecretKeySelector `json:"password"`
+}
+
+// BearerAuthConfig holds bearer token authentication credentials.
+type BearerAuthConfig struct {
+	// Token selects the Secret key holding the bearer token sent as
+	// `Authorization: Bearer <token>`.
+	Token corev1.SecretKeySelector `json:"token"`
 }
 
 // AutoScalerPhase represents the current phase of an AutoScaler.

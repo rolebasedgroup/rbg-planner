@@ -19,7 +19,10 @@ package controller
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -76,10 +79,12 @@ type AutoScalerReconciler struct {
 // +kubebuilder:rbac:groups=inference-extension.rolebasedgroup.io,resources=autoscalers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=inference-extension.rolebasedgroup.io,resources=autoscalers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=inference-extension.rolebasedgroup.io,resources=autoscalers/finalizers,verbs=update
-// +kubebuilder:rbac:groups=workloads.x-k8s.io,resources=rolebasedgroups,verbs=get;list;watch
+// +kubebuilder:rbac:groups=workloads.x-k8s.io,resources=rolebasedgroups,verbs=get;list;watch;patch
+// +kubebuilder:rbac:groups=workloads.x-k8s.io,resources=rolebasedgroupscalingadapters/scale,verbs=patch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts;configmaps,verbs=get;list;watch;create;update;delete
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=get;list;watch;create;update;delete
 
 func (r *AutoScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -143,8 +148,10 @@ func (r *AutoScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			logger.Info("target RBG not found", "name", rbgName)
 			r.Recorder.Event(ras, corev1.EventTypeWarning, "RBGNotFound",
 				fmt.Sprintf("RoleBasedGroup %s/%s not found", rbgNamespace, rbgName))
-			_ = r.setPhase(ctx, ras, "Pending", "RBGNotFound",
-				fmt.Sprintf("Waiting for RoleBasedGroup %s to exist", rbgName))
+			if err := r.setPhase(ctx, ras, "Pending", "RBGNotFound",
+				fmt.Sprintf("Waiting for RoleBasedGroup %s to exist", rbgName)); err != nil {
+				logger.Error(err, "failed to set phase")
+			}
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
 		return ctrl.Result{}, err
@@ -159,17 +166,40 @@ func (r *AutoScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return ctrl.Result{}, err
 	}
 
+	// 5b. Wait for RBG roles to be ready before profiling.
+	prefillReady := getRoleReadyReplicas(rbg, spec.prefillRoleName)
+	decodeReady := getRoleReadyReplicas(rbg, spec.decodeRoleName)
+	if prefillReady == 0 || decodeReady == 0 {
+		logger.Info("RBG roles not ready, waiting",
+			"prefillReady", prefillReady, "decodeReady", decodeReady)
+		if err := r.setPhase(ctx, ras, "Pending", "RBGNotReady",
+			"Waiting for RBG roles to become ready"); err != nil {
+			logger.Error(err, "failed to set phase")
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
 	// 6. Handle Profiling.
+	// If profiling previously failed, stop reconciling to avoid loops.
+	// The user must delete and recreate the AutoScaler to retry.
+	if phase, _, _ := unstructured.NestedString(ras.Object, "status", "phase"); phase == "Failed" {
+		return ctrl.Result{}, nil
+	}
+
 	profilingCMName, ready, err := r.handleProfiling(ctx, ras, spec)
 	if err != nil {
 		logger.Error(err, "profiling failed")
-		_ = r.setPhase(ctx, ras, "Failed", "ProfilingFailed", err.Error())
-		return ctrl.Result{}, err
+		if err := r.setPhase(ctx, ras, "Failed", "ProfilingFailed", err.Error()); err != nil {
+			logger.Error(err, "failed to set phase")
+		}
+		return ctrl.Result{}, nil
 	}
 	if !ready {
 		logger.Info("profiling in progress")
-		_ = r.setPhase(ctx, ras, "Initializing", "ProfilingInProgress", "Profiling Job is running")
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		if err := r.setPhase(ctx, ras, "Initializing", "ProfilingInProgress", "Profiling Job is running"); err != nil {
+			logger.Error(err, "failed to set phase")
+		}
+		return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 	}
 
 	// 7. Ensure Planner Deployment.
@@ -190,25 +220,36 @@ func (r *AutoScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 // parsedSpec holds the parsed AutoScaler spec fields.
 type parsedSpec struct {
-	scalingInterval    int
-	prefillRoleName    string
-	decodeRoleName     string
-	prefillMinReplicas int32
-	prefillMaxReplicas int32
-	decodeMinReplicas  int32
-	decodeMaxReplicas  int32
-	plannerImage       string
-	modelName          string
-	ttft               float64
-	itl                float64
-	loadPredictor      string
-	predictionWindow   int
-	noCorrection       bool
-	dryRun             bool
-	profilingImage     string
-	metricSource       string
-	metricsPort        int
-	prometheusEndpoint string
+	scalingInterval      int
+	backend              string
+	prefillRoleName      string
+	decodeRoleName       string
+	prefillMinReplicas   int32
+	prefillMaxReplicas   int32
+	decodeMinReplicas    int32
+	decodeMaxReplicas    int32
+	plannerImage         string
+	modelName            string
+	ttft                 float64
+	itl                  float64
+	loadPredictor        string
+	predictionWindow     int
+	noCorrection         bool
+	dryRun               bool
+	profilingImage       string
+	profilingInputFormat string
+	metricSource         string
+	metricsPort          int
+	prometheusEndpoint   string
+	// per-CR overrides from spec.implementation.dynamoPlanner.metrics
+	prometheusEndpointOverride string
+	prometheusUsernameSecret   *corev1.SecretKeySelector
+	prometheusPasswordSecret   *corev1.SecretKeySelector
+	prometheusTokenSecret      *corev1.SecretKeySelector
+	modelCachePVCName          string
+	modelCacheModelPath        string
+	modelCacheMountPath        string
+	imagePullSecrets           []corev1.LocalObjectReference
 }
 
 func (r *AutoScalerReconciler) parseRASSpec(ras *unstructured.Unstructured) (*parsedSpec, error) {
@@ -220,12 +261,13 @@ func (r *AutoScalerReconciler) parseRASSpec(ras *unstructured.Unstructured) (*pa
 	s := &parsedSpec{
 		scalingInterval: getIntField(spec, "scalingInterval", 180),
 	}
+	s.backend = getStrField(spec, "backend", "sglang-oai")
 
-	// pattern.PDDisaggregated
+	// pattern.pdDisaggregated
 	po, _ := spec["pattern"].(map[string]interface{})
-	pd, _ := po["PDDisaggregated"].(map[string]interface{})
+	pd, _ := po["pdDisaggregated"].(map[string]interface{})
 	if pd == nil {
-		return nil, fmt.Errorf("pattern.PDDisaggregated is required")
+		return nil, fmt.Errorf("pattern.pdDisaggregated is required")
 	}
 	prefill, _ := pd["prefill"].(map[string]interface{})
 	decode, _ := pd["decode"].(map[string]interface{})
@@ -236,23 +278,36 @@ func (r *AutoScalerReconciler) parseRASSpec(ras *unstructured.Unstructured) (*pa
 	s.decodeMinReplicas = int32(getIntField(decode, "minReplicas", 1))
 	s.decodeMaxReplicas = int32(getIntField(decode, "maxReplicas", 1))
 
-	// implementation.DynamoPlanner
+	// implementation.dynamoPlanner
 	se, _ := spec["implementation"].(map[string]interface{})
-	dp, _ := se["DynamoPlanner"].(map[string]interface{})
+	dp, _ := se["dynamoPlanner"].(map[string]interface{})
 	if dp == nil {
-		return nil, fmt.Errorf("implementation.DynamoPlanner is required")
+		return nil, fmt.Errorf("implementation.dynamoPlanner is required")
 	}
 	s.plannerImage = r.PlannerImage
 	if s.plannerImage == "" {
 		s.plannerImage = defaultPlannerImage
 	}
 	s.modelName = getStrField(dp, "modelName", "")
-	s.ttft = getFloatField(dp, "ttft", 500.0)
-	s.itl = getFloatField(dp, "itl", 50.0)
+	// sla
+	slaMap, _ := dp["sla"].(map[string]interface{})
+	s.ttft = getFloatField(slaMap, "ttft", 500.0)
+	s.itl = getFloatField(slaMap, "itl", 50.0)
 	s.loadPredictor = getStrField(dp, "loadPredictor", "arima")
 	s.predictionWindow = getIntField(dp, "predictionWindow", 50)
 	s.noCorrection = getBoolField(dp, "noCorrection")
 	s.dryRun = getBoolField(dp, "dryRun")
+
+	// imagePullSecrets
+	if ips, ok := dp["imagePullSecrets"].([]interface{}); ok {
+		for _, item := range ips {
+			if m, ok := item.(map[string]interface{}); ok {
+				if name, ok := m["name"].(string); ok {
+					s.imagePullSecrets = append(s.imagePullSecrets, corev1.LocalObjectReference{Name: name})
+				}
+			}
+		}
+	}
 
 	// profiling
 	prof, _ := dp["profiling"].(map[string]interface{})
@@ -261,16 +316,31 @@ func (r *AutoScalerReconciler) parseRASSpec(ras *unstructured.Unstructured) (*pa
 		profilerDefault = defaultProfilerImage
 	}
 	s.profilingImage = getStrField(prof, "image", profilerDefault)
+	s.profilingInputFormat = getStrField(prof, "inputFormat", "auto")
 
-	// metricsEndpoint
-	me, _ := dp["metricsEndpoint"].(map[string]interface{})
-	s.metricSource = getStrField(me, "metricSource", "sglang")
+	// modelSource
+	if mc, ok := prof["modelSource"].(map[string]interface{}); ok && mc != nil {
+		s.modelCachePVCName = getStrField(mc, "pvcName", "")
+		s.modelCacheModelPath = getStrField(mc, "modelPath", "")
+		s.modelCacheMountPath = getStrField(mc, "mountPath", "/opt/model")
+	}
+
+	// metrics
+	me, _ := dp["metrics"].(map[string]interface{})
+	s.metricSource = getStrField(me, "metricSource", "")
 	s.metricsPort = getIntField(me, "port", 9091)
+	s.prometheusEndpointOverride = getStrField(me, "endpoint", "")
+	if err := parseMetricsAuth(me, s); err != nil {
+		return nil, fmt.Errorf("metrics auth: %w", err)
+	}
 
 	// prometheusEndpoint
 	s.prometheusEndpoint = r.PrometheusEndpoint
 	if s.prometheusEndpoint == "" {
 		s.prometheusEndpoint = defaultPrometheusEndpoint
+	}
+	if s.prometheusEndpointOverride != "" {
+		s.prometheusEndpoint = s.prometheusEndpointOverride
 	}
 
 	return s, nil
@@ -360,7 +430,30 @@ func (r *AutoScalerReconciler) ensureRBAC(ctx context.Context, ras *unstructured
 }
 
 func (r *AutoScalerReconciler) cleanupClusterResources(ctx context.Context, ras *unstructured.Unstructured) error {
-	crbName := ras.GetName() + "-planner-binding"
+	namespace := ras.GetNamespace()
+	name := ras.GetName()
+
+	// 1. Delete profiling Job with foreground cascade so its pods are
+	// removed before the Job object disappears from etcd.
+	jobName := name + "-profiling"
+	job := &batchv1.Job{}
+	if err := r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: namespace}, job); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("get profiling job %s: %w", jobName, err)
+		}
+		// Job already gone — fall through to CRB cleanup.
+	} else {
+		if job.GetDeletionTimestamp() == nil {
+			if delErr := r.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationForeground)); delErr != nil && !apierrors.IsNotFound(delErr) {
+				return fmt.Errorf("delete profiling job %s: %w", jobName, delErr)
+			}
+		}
+		// Job still exists (being deleted) — requeue until it is gone.
+		return fmt.Errorf("waiting for profiling job %s deletion", jobName)
+	}
+
+	// 2. Delete ClusterRoleBinding.
+	crbName := name + "-planner-binding"
 	crb := &rbacv1.ClusterRoleBinding{}
 	if err := r.Get(ctx, types.NamespacedName{Name: crbName}, crb); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -411,6 +504,11 @@ func (r *AutoScalerReconciler) handleProfiling(ctx context.Context, ras *unstruc
 	}
 
 	if job.Status.Failed > 0 {
+		if job.GetDeletionTimestamp() == nil {
+			if delErr := r.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationForeground)); delErr != nil && !apierrors.IsNotFound(delErr) {
+				return "", false, fmt.Errorf("profiling job %s failed and cleanup failed: %w", jobName, delErr)
+			}
+		}
 		return "", false, fmt.Errorf("profiling job %s failed", jobName)
 	}
 
@@ -418,12 +516,74 @@ func (r *AutoScalerReconciler) handleProfiling(ctx context.Context, ras *unstruc
 	return "", false, nil
 }
 
+// buildProfilingVolumes constructs PVC volume, volume mount, and tokenizer
+// path from the ModelSource spec fields. Returns empty values when pvcName
+// is empty.
+func buildProfilingVolumes(pvcName, modelPath, mountPath string) (volumes []corev1.Volume, volumeMounts []corev1.VolumeMount, tokenizerPath string) {
+	if pvcName == "" {
+		return nil, nil, ""
+	}
+	if mountPath == "" {
+		mountPath = "/opt/model"
+	}
+	volumes = []corev1.Volume{
+		{
+			Name: "model-cache",
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: pvcName,
+				},
+			},
+		},
+	}
+	volumeMounts = []corev1.VolumeMount{
+		{
+			Name:      "model-cache",
+			MountPath: mountPath,
+			ReadOnly:  true,
+		},
+	}
+	if modelPath != "" {
+		if strings.HasPrefix(modelPath, "/") {
+			tokenizerPath = modelPath
+		} else {
+			tokenizerPath = filepath.Join(mountPath, modelPath)
+		}
+	}
+	return volumes, volumeMounts, tokenizerPath
+}
+
 func (r *AutoScalerReconciler) createProfilingJob(ctx context.Context, ras *unstructured.Unstructured, spec *parsedSpec, jobName, cmName string) error {
 	namespace := ras.GetNamespace()
 	rbgName := ras.GetName()
 	saName := rbgName + "-planner"
 
+	volumes, volumeMounts, tokenizerPath := buildProfilingVolumes(
+		spec.modelCachePVCName,
+		spec.modelCacheModelPath,
+		spec.modelCacheMountPath,
+	)
+
+	args := []string{
+		"--rbg-name", rbgName,
+		"--namespace", namespace,
+		"--model-name", spec.modelName,
+		"--output-configmap", cmName,
+		"--prefill-role-name", spec.prefillRoleName,
+		"--decode-role-name", spec.decodeRoleName,
+		"--backend", spec.backend,
+	}
+	if tokenizerPath != "" {
+		args = append(args, "--tokenizer", tokenizerPath)
+	}
+	// Only pass --input-format when explicitly configured; "auto" is the
+	// profiler's default and lets each bench backend pick its preferred form.
+	if spec.profilingInputFormat != "" && spec.profilingInputFormat != "auto" {
+		args = append(args, "--input-format", spec.profilingInputFormat)
+	}
+
 	backoffLimit := int32(1)
+	activeDeadline := int64(1800)
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      jobName,
@@ -433,24 +593,20 @@ func (r *AutoScalerReconciler) createProfilingJob(ctx context.Context, ras *unst
 			},
 		},
 		Spec: batchv1.JobSpec{
-			BackoffLimit: &backoffLimit,
+			BackoffLimit:          &backoffLimit,
+			ActiveDeadlineSeconds: &activeDeadline,
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					ServiceAccountName: saName,
 					RestartPolicy:      corev1.RestartPolicyNever,
+					ImagePullSecrets:   spec.imagePullSecrets,
+					Volumes:            volumes,
 					Containers: []corev1.Container{
 						{
-							Name:  "profiler",
-							Image: spec.profilingImage,
-							Args: []string{
-								"--model-name", spec.modelName,
-								"--engine", spec.metricSource,
-								"--ttft-sla", fmt.Sprintf("%.1f", spec.ttft),
-								"--itl-sla", fmt.Sprintf("%.1f", spec.itl),
-								"--rbg-name", rbgName,
-								"--namespace", namespace,
-								"--output-configmap", cmName,
-							},
+							Name:         "profiler",
+							Image:        spec.profilingImage,
+							Args:         args,
+							VolumeMounts: volumeMounts,
 						},
 					},
 				},
@@ -497,6 +653,7 @@ func (r *AutoScalerReconciler) ensurePlannerDeployment(ctx context.Context, ras 
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName: saName,
+					ImagePullSecrets:   spec.imagePullSecrets,
 					Containers: []corev1.Container{
 						{
 							Name:  "planner",
@@ -551,13 +708,13 @@ func (r *AutoScalerReconciler) ensurePlannerDeployment(ctx context.Context, ras 
 }
 
 func buildPlannerEnv(rbgName string, spec *parsedSpec, namespace string, maxGPUBudget, prefillGPUs, decodeGPUs int) []corev1.EnvVar {
-	return []corev1.EnvVar{
+	env := []corev1.EnvVar{
 		{Name: "RBG_NAME", Value: rbgName},
 		{Name: "RBG_NAMESPACE", Value: namespace},
 		{Name: "PREFILL_ROLE_NAME", Value: spec.prefillRoleName},
 		{Name: "DECODE_ROLE_NAME", Value: spec.decodeRoleName},
 		{Name: "PROMETHEUS_ENDPOINT", Value: spec.prometheusEndpoint},
-		{Name: "METRIC_SOURCE", Value: spec.metricSource},
+		{Name: "BACKEND", Value: spec.backend},
 		{Name: "MODEL_NAME", Value: spec.modelName},
 		{Name: "ADJUSTMENT_INTERVAL", Value: strconv.Itoa(spec.scalingInterval)},
 		{Name: "MAX_GPU_BUDGET", Value: strconv.Itoa(maxGPUBudget)},
@@ -575,6 +732,40 @@ func buildPlannerEnv(rbgName string, spec *parsedSpec, namespace string, maxGPUB
 		{Name: "PROFILE_RESULTS_DIR", Value: "/etc/rbg-planner/profiling"},
 		{Name: "PLANNER_PROMETHEUS_PORT", Value: strconv.Itoa(spec.metricsPort)},
 	}
+	// Only set METRIC_SOURCE when explicitly configured; otherwise the
+	// planner derives it from BACKEND (e.g. "sglang-oai" -> "sglang").
+	if spec.metricSource != "" {
+		env = append(env, corev1.EnvVar{Name: "METRIC_SOURCE", Value: spec.metricSource})
+	}
+	// Prometheus credentials: prefer the per-CR metrics secret selectors
+	// (never inlined into the pod spec); fall back to forwarding
+	// operator-level env so a single-credential install needs no CR
+	// configuration.
+	if spec.prometheusTokenSecret != nil {
+		env = append(env, corev1.EnvVar{
+			Name:      "PROMETHEUS_TOKEN",
+			ValueFrom: &corev1.EnvVarSource{SecretKeyRef: spec.prometheusTokenSecret},
+		})
+	} else if spec.prometheusUsernameSecret != nil {
+		env = append(env,
+			corev1.EnvVar{
+				Name:      "PROMETHEUS_USERNAME",
+				ValueFrom: &corev1.EnvVarSource{SecretKeyRef: spec.prometheusUsernameSecret},
+			},
+			corev1.EnvVar{
+				Name:      "PROMETHEUS_PASSWORD",
+				ValueFrom: &corev1.EnvVarSource{SecretKeyRef: spec.prometheusPasswordSecret},
+			},
+		)
+	} else {
+		if v := os.Getenv("PROMETHEUS_USERNAME"); v != "" {
+			env = append(env, corev1.EnvVar{Name: "PROMETHEUS_USERNAME", Value: v})
+		}
+		if v := os.Getenv("PROMETHEUS_PASSWORD"); v != "" {
+			env = append(env, corev1.EnvVar{Name: "PROMETHEUS_PASSWORD", Value: v})
+		}
+	}
+	return env
 }
 
 // --- Status ---
@@ -612,6 +803,22 @@ func (r *AutoScalerReconciler) updateReadyStatus(ctx context.Context, ras *unstr
 }
 
 func (r *AutoScalerReconciler) setPhase(ctx context.Context, ras *unstructured.Unstructured, phase, reason, message string) error {
+	if existing, _ := ras.Object["status"].(map[string]interface{}); existing != nil {
+		if existingPhase, _ := existing["phase"].(string); existingPhase == phase {
+			if conds, _ := existing["conditions"].([]interface{}); len(conds) > 0 {
+				for _, c := range conds {
+					cond, _ := c.(map[string]interface{})
+					if cond == nil || cond["type"] != "Ready" {
+						continue
+					}
+					if cond["reason"] == reason && cond["message"] == message {
+						return nil
+					}
+				}
+			}
+		}
+	}
+
 	status, _ := ras.Object["status"].(map[string]interface{})
 	if status == nil {
 		status = map[string]interface{}{}
@@ -664,9 +871,53 @@ func getGPUsFromRBG(rbg *unstructured.Unstructured, prefillRole, decodeRole stri
 	return prefillGPUs, decodeGPUs
 }
 
+// getRolePodSpec extracts the pod spec from an RBG role, trying multiple
+// pattern paths: standalonePattern.template, leaderWorkerPattern.leaderTemplate,
+// customComponentsPattern.components[0].template, and a direct template fallback.
+// For customComponents, it prefers a component named "engine" or "server"
+// (matching the Python discoverer's _get_template logic), then falls back to
+// the first component.
+func getRolePodSpec(role map[string]interface{}) map[string]interface{} {
+	if spec, found, _ := unstructured.NestedMap(role, "standalonePattern", "template", "spec"); found {
+		return spec
+	}
+	if spec, found, _ := unstructured.NestedMap(role, "leaderWorkerPattern", "leaderTemplate", "spec"); found {
+		return spec
+	}
+	components, found, _ := unstructured.NestedSlice(role, "customComponentsPattern", "components")
+	if found && len(components) > 0 {
+		// Prefer "engine" or "server" component, matching Python _get_template.
+		for _, c := range components {
+			comp, ok := c.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			name, _, _ := unstructured.NestedString(comp, "name")
+			if name == "engine" || name == "server" {
+				if spec, found, _ := unstructured.NestedMap(comp, "template", "spec"); found {
+					return spec
+				}
+			}
+		}
+		// Fall back to first component.
+		if comp, ok := components[0].(map[string]interface{}); ok {
+			if spec, found, _ := unstructured.NestedMap(comp, "template", "spec"); found {
+				return spec
+			}
+		}
+	}
+	if spec, found, _ := unstructured.NestedMap(role, "template", "spec"); found {
+		return spec
+	}
+	return nil
+}
+
 func extractGPURequest(role map[string]interface{}) int {
-	// Try spec.roles[].template.spec.containers[].resources.requests["nvidia.com/gpu"]
-	containers, found, _ := unstructured.NestedSlice(role, "template", "spec", "containers")
+	podSpec := getRolePodSpec(role)
+	if podSpec == nil {
+		return 0
+	}
+	containers, found, _ := unstructured.NestedSlice(podSpec, "containers")
 	if !found {
 		return 0
 	}
@@ -675,16 +926,24 @@ func extractGPURequest(role map[string]interface{}) int {
 		if !ok {
 			continue
 		}
-		gpuStr, found, _ := unstructured.NestedString(container, "resources", "requests", "nvidia.com/gpu")
-		if found {
-			if v, err := strconv.Atoi(gpuStr); err == nil {
-				return v
-			}
+		requests, found, _ := unstructured.NestedMap(container, "resources", "requests")
+		if !found {
+			continue
 		}
-		// Also try as int64 (some k8s serializations).
-		gpuInt, found, _ := unstructured.NestedInt64(container, "resources", "requests", "nvidia.com/gpu")
-		if found {
-			return int(gpuInt)
+		for key, value := range requests {
+			if !strings.HasSuffix(key, "/gpu") {
+				continue
+			}
+			switch v := value.(type) {
+			case string:
+				if n, err := strconv.Atoi(v); err == nil {
+					return n
+				}
+			case int64:
+				return int(v)
+			case float64:
+				return int(v)
+			}
 		}
 	}
 	return 0
@@ -732,8 +991,7 @@ func (r *AutoScalerReconciler) createIfNotExists(ctx context.Context, obj client
 
 func (r *AutoScalerReconciler) createOrUpdate(ctx context.Context, obj client.Object, mutateFn func()) error {
 	key := types.NamespacedName{Name: obj.GetName(), Namespace: obj.GetNamespace()}
-	existing := obj.DeepCopyObject().(client.Object)
-	err := r.Get(ctx, key, existing)
+	err := r.Get(ctx, key, obj)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return r.Create(ctx, obj)
@@ -741,7 +999,7 @@ func (r *AutoScalerReconciler) createOrUpdate(ctx context.Context, obj client.Ob
 		return err
 	}
 	mutateFn()
-	return nil
+	return r.Update(ctx, obj)
 }
 
 func boolToConditionStatus(b bool) string {
@@ -762,6 +1020,57 @@ func getStrField(m map[string]interface{}, key, defaultVal string) string {
 		return defaultVal
 	}
 	return v
+}
+
+// parseMetricsAuth reads metrics.authentication.{basicAuth,bearer} and
+// enforces oneOf semantics: basicAuth (username+password) and bearer are
+// mutually exclusive.
+func parseMetricsAuth(me map[string]interface{}, s *parsedSpec) error {
+	auth, ok := me["authentication"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	if ba, ok := auth["basicAuth"].(map[string]interface{}); ok {
+		username, err := parseRequiredSecretKeySelector(ba, "username")
+		if err != nil {
+			return fmt.Errorf("basicAuth.username: %w", err)
+		}
+		password, err := parseRequiredSecretKeySelector(ba, "password")
+		if err != nil {
+			return fmt.Errorf("basicAuth.password: %w", err)
+		}
+		s.prometheusUsernameSecret = &username
+		s.prometheusPasswordSecret = &password
+	}
+	if b, ok := auth["bearer"].(map[string]interface{}); ok {
+		token, err := parseRequiredSecretKeySelector(b, "token")
+		if err != nil {
+			return fmt.Errorf("bearer.token: %w", err)
+		}
+		s.prometheusTokenSecret = &token
+	}
+	if s.prometheusUsernameSecret != nil && s.prometheusTokenSecret != nil {
+		return fmt.Errorf("basicAuth and bearer are mutually exclusive")
+	}
+	return nil
+}
+
+// parseRequiredSecretKeySelector reads a mandatory {name, key}
+// SecretKeySelector from an unstructured map.
+func parseRequiredSecretKeySelector(m map[string]interface{}, field string) (corev1.SecretKeySelector, error) {
+	sub, ok := m[field].(map[string]interface{})
+	if !ok {
+		return corev1.SecretKeySelector{}, fmt.Errorf("must be a {name, key} SecretKeySelector")
+	}
+	name := getStrField(sub, "name", "")
+	key := getStrField(sub, "key", "")
+	if name == "" || key == "" {
+		return corev1.SecretKeySelector{}, fmt.Errorf("requires both name and key")
+	}
+	return corev1.SecretKeySelector{
+		LocalObjectReference: corev1.LocalObjectReference{Name: name},
+		Key:                  key,
+	}, nil
 }
 
 func getIntField(m map[string]interface{}, key string, defaultVal int) int {

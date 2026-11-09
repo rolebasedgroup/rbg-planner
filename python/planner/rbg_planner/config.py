@@ -22,7 +22,8 @@ class PlannerConfig:
         "PROMETHEUS_ENDPOINT",
         "http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090",
     )
-    metric_source: str = os.environ.get("METRIC_SOURCE", "sglang")  # sglang | vllm | patio | dynamo
+    backend: str = os.environ.get("BACKEND", "sglang-oai")
+    metric_source: str = os.environ.get("METRIC_SOURCE", "")  # sglang | vllm | patio | dynamo
     model_name: str = os.environ.get("MODEL_NAME", "")
 
     # Planner parameters
@@ -47,3 +48,11 @@ class PlannerConfig:
 
     # Operation mode
     no_operation: bool = os.environ.get("NO_OPERATION", "false").lower() == "true"
+
+    def __init__(self):
+        # Re-read from environment so tests using patch.dict(os.environ) work.
+        self.backend = os.environ.get("BACKEND", "sglang-oai")
+        self.metric_source = os.environ.get("METRIC_SOURCE", "")
+        # Derive metric_source from backend if not explicitly set.
+        if not self.metric_source:
+            self.metric_source = self.backend.split("-", 1)[0]
