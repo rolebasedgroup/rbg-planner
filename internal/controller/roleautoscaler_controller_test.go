@@ -21,8 +21,8 @@ import (
 	"strings"
 	"testing"
 
-	batchv1 "k8s.io/api/batch/v1"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -618,6 +618,144 @@ func TestParseRASSpec_ImagePullSecrets(t *testing.T) {
 	}
 	if spec.imagePullSecrets[1].Name != "ghcr-secret" {
 		t.Errorf("expected second secret 'ghcr-secret', got %q", spec.imagePullSecrets[1].Name)
+	}
+}
+
+func TestParseRASSpec_InputFormat(t *testing.T) {
+	ras := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"spec": map[string]interface{}{
+				"scalingInterval": 180,
+				"backend":         "sglang-oai",
+				"pattern": map[string]interface{}{
+					"pdDisaggregated": map[string]interface{}{
+						"prefill": map[string]interface{}{
+							"roleName":    "prefill",
+							"maxReplicas": int64(10),
+							"minReplicas": int64(1),
+						},
+						"decode": map[string]interface{}{
+							"roleName":    "decode",
+							"maxReplicas": int64(10),
+							"minReplicas": int64(1),
+						},
+					},
+				},
+				"implementation": map[string]interface{}{
+					"dynamoPlanner": map[string]interface{}{
+						"modelName": "Qwen",
+						"profiling": map[string]interface{}{
+							"inputFormat": "text",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	r := &AutoScalerReconciler{}
+	spec, err := r.parseRASSpec(ras)
+	if err != nil {
+		t.Fatalf("parseRASSpec failed: %v", err)
+	}
+	if spec.profilingInputFormat != "text" {
+		t.Fatalf("expected inputFormat 'text', got %q", spec.profilingInputFormat)
+	}
+}
+
+func TestParseRASSpec_InputFormatDefaultsToAuto(t *testing.T) {
+	ras := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"spec": map[string]interface{}{
+				"pattern": map[string]interface{}{
+					"pdDisaggregated": map[string]interface{}{
+						"prefill": map[string]interface{}{
+							"roleName":    "prefill",
+							"maxReplicas": int64(10),
+						},
+						"decode": map[string]interface{}{
+							"roleName":    "decode",
+							"maxReplicas": int64(10),
+						},
+					},
+				},
+				"implementation": map[string]interface{}{
+					"dynamoPlanner": map[string]interface{}{
+						"modelName": "Qwen",
+					},
+				},
+			},
+		},
+	}
+
+	r := &AutoScalerReconciler{}
+	spec, err := r.parseRASSpec(ras)
+	if err != nil {
+		t.Fatalf("parseRASSpec failed: %v", err)
+	}
+	if spec.profilingInputFormat != "auto" {
+		t.Fatalf("expected default inputFormat 'auto', got %q", spec.profilingInputFormat)
+	}
+}
+
+func TestCreateProfilingJob_InputFormatArgs(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := batchv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add batch scheme: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add core scheme: %v", err)
+	}
+
+	newJob := func(inputFormat string) *batchv1.Job {
+		ras := &unstructured.Unstructured{}
+		ras.SetName("test-rbg")
+		ras.SetNamespace("test-ns")
+		ras.SetUID("test-uid")
+
+		cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+		r := &AutoScalerReconciler{Client: cl, Scheme: scheme}
+
+		spec := &parsedSpec{
+			profilingImage:       "ghcr.io/rolebasedgroup/rbg-profiler:latest",
+			backend:              "sglang-oai",
+			profilingInputFormat: inputFormat,
+		}
+		if err := r.createProfilingJob(context.Background(), ras, spec, "test-rbg-profiling", "test-rbg-profiling"); err != nil {
+			t.Fatalf("createProfilingJob failed: %v", err)
+		}
+		created := &batchv1.Job{}
+		if err := cl.Get(context.Background(),
+			types.NamespacedName{Name: "test-rbg-profiling", Namespace: "test-ns"}, created); err != nil {
+			t.Fatalf("failed to get created job: %v", err)
+		}
+		return created
+	}
+
+	containsArg := func(args []string, flag, value string) bool {
+		for i, a := range args {
+			if a == flag && i+1 < len(args) && args[i+1] == value {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Explicit inputFormat is forwarded as --input-format.
+	job := newJob("text")
+	args := job.Spec.Template.Spec.Containers[0].Args
+	if !containsArg(args, "--input-format", "text") {
+		t.Errorf("expected args to contain '--input-format text', got %v", args)
+	}
+
+	// Default "auto" must not add --input-format so the profiler keeps
+	// backend-specific defaults.
+	job = newJob("auto")
+	args = job.Spec.Template.Spec.Containers[0].Args
+	for i, a := range args {
+		if a == "--input-format" {
+			t.Errorf("expected no '--input-format' arg for auto default, got %v (at index %d: %s)", args, i, a)
+		}
 	}
 }
 

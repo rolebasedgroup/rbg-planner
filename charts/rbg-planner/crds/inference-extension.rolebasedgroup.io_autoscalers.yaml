@@ -156,6 +156,20 @@ spec:
                               Image is the container image for the profiling tool.
                               If empty, a default image is used.
                             type: string
+                          inputFormat:
+                            default: auto
+                            description: |-
+                              InputFormat selects the prompt input form used by profiling bench
+                              requests. "text" sends tokenizer-decoded prompt strings (required by
+                              routers such as SMG that only accept string prompts), "token_ids" sends
+                              token ID arrays, and "auto" (default) lets the bench backend choose its
+                              preferred form (token_ids for completions backends, text for chat
+                              backends).
+                            enum:
+                            - auto
+                            - text
+                            - token_ids
+                            type: string
                           modelSource:
                             description: |-
                               ModelSource provides PVC configuration for the profiler to access

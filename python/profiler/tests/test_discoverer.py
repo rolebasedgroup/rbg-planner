@@ -134,6 +134,18 @@ def test_parse_port_from_args_default_by_engine():
     assert _parse_port_from_args([], "lmdeploy") == 23333
 
 
+def test_parse_port_from_args_pd_native_default_is_engine_port():
+    """sglang-pd-native defaults to the engine port, not the router port."""
+    assert _parse_port_from_args([], "sglang-pd-native") == 8000
+
+
+def test_parse_port_from_args_pd_native_prefers_explicit_port():
+    assert (
+        _parse_port_from_args(["--port", "8001"], "sglang-pd-native") == 8001
+    )
+    assert _parse_port_from_args(["--port=8000"], "sglang-pd-native") == 8000
+
+
 def test_parse_port_from_args_fallback():
     assert _parse_port_from_args([], "unknown-engine") == 8000
 

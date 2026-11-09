@@ -275,6 +275,9 @@ class RequestFuncInput:
     model: str
     api_url: str
     is_chat: bool
+    # Decoded prompt text. Populated when the resolved input format is "text";
+    # empty otherwise. ``prompt`` always holds the token IDs.
+    prompt_text: str = ""
 
 
 @dataclass
@@ -381,12 +384,34 @@ class BaseBenchBackend(BenchBackend):
       - default_port: int
       - _build_request_payload(): construct the request JSON payload
       - _send_request(): send a single streaming request and collect timing
+
+    Input format:
+      ``input_format`` controls the prompt form sent to the server:
+      "token_ids" sends the raw token ID array, "text" sends the
+      tokenizer-decoded string (required by routers that reject token ID
+      prompts, e.g. SMG). "auto" (default) resolves to the backend's
+      ``preferred_input_form``.
     """
 
     api_path: str = "/v1/completions"
     default_port: int = 30000
 
+    #: Prompt form used when input_format is "auto".
+    preferred_input_form: str = "token_ids"
+
     _tokenizer_cache: dict[str, object] = {}
+
+    VALID_INPUT_FORMATS = ("auto", "text", "token_ids")
+
+    def __init__(self, input_format: str = "auto"):
+        if input_format not in self.VALID_INPUT_FORMATS:
+            raise ValueError(
+                f"Invalid input_format: {input_format!r}. "
+                f"Valid values: {list(self.VALID_INPUT_FORMATS)}"
+            )
+        if input_format == "auto":
+            input_format = self.preferred_input_form
+        self.input_format = input_format
 
     @abstractmethod
     def _build_request_payload(
@@ -411,6 +436,29 @@ class BaseBenchBackend(BenchBackend):
             )
         return self._tokenizer_cache[tokenizer_path]
 
+    def _make_request_input(
+        self,
+        prompt: list[int],
+        tokenizer,
+        model: str,
+        api_url: str,
+        is_chat: bool,
+        output_len: int,
+    ) -> RequestFuncInput:
+        """Build a RequestFuncInput, decoding prompt text when needed."""
+        prompt_text = ""
+        if self.input_format == "text":
+            prompt_text = tokenizer.decode(prompt)
+        return RequestFuncInput(
+            prompt=prompt,
+            prompt_text=prompt_text,
+            prompt_len=len(prompt),
+            output_len=output_len,
+            model=model,
+            api_url=api_url,
+            is_chat=is_chat,
+        )
+
     async def run_benchmark(
         self,
         endpoint: RoleEndpoint,
@@ -429,25 +477,25 @@ class BaseBenchBackend(BenchBackend):
         input_requests = []
         for _ in range(num_prompts):
             prompt = generate_random_input_ids(tokenizer, isl)
-            input_requests.append(RequestFuncInput(
+            input_requests.append(self._make_request_input(
                 prompt=prompt,
-                prompt_len=isl,
-                output_len=osl,
+                tokenizer=tokenizer,
                 model=model,
                 api_url=api_url,
                 is_chat=is_chat,
+                output_len=osl,
             ))
 
         session = _create_bench_client_session()
         try:
             # Warmup with one request.
-            warmup_req = RequestFuncInput(
+            warmup_req = self._make_request_input(
                 prompt=generate_random_input_ids(tokenizer, min(isl, 128)),
-                prompt_len=min(isl, 128),
-                output_len=min(osl, 32),
+                tokenizer=tokenizer,
                 model=model,
                 api_url=api_url,
                 is_chat=is_chat,
+                output_len=min(osl, 32),
             )
             warmup_output = await self._send_request(session, warmup_req)
             if not warmup_output.success:

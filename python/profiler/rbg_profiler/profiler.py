@@ -54,13 +54,20 @@ def _update_configmap(name: str, namespace: str, prefill_data: dict, decode_data
             raise
 
 
-async def run_profiling(args, prefill_endpoint: RoleEndpoint, decode_endpoint: RoleEndpoint, backend: str = "sglang-oai"):
+async def run_profiling(
+    args,
+    prefill_endpoint: RoleEndpoint,
+    decode_endpoint: RoleEndpoint,
+    backend: str = "sglang-oai",
+    input_format: str = "auto",
+):
     """Run full SLA profiling pipeline and store results."""
     logger.info("SLA Profiler starting")
     logger.info("  PREFILL_BASE_URL: %s", prefill_endpoint.base_url)
     logger.info("  DECODE_BASE_URL: %s", decode_endpoint.base_url)
     logger.info("  MODEL: %s", args.model_name)
     logger.info("  BACKEND: %s", backend)
+    logger.info("  INPUT_FORMAT: %s", input_format)
     logger.info("  PREFILL_GPUS: %d", prefill_endpoint.num_gpus)
     logger.info("  DECODE_GPUS: %d", decode_endpoint.num_gpus)
     logger.info("  MAX_KV_TOKENS: %d", args.max_kv_tokens)
@@ -68,7 +75,14 @@ async def run_profiling(args, prefill_endpoint: RoleEndpoint, decode_endpoint: R
 
     os.makedirs(args.output_dir, exist_ok=True)
 
-    bench_backend = create_bench_backend(backend)
+    backend_kwargs = {}
+    if backend == "sglang-pd-native":
+        backend_kwargs["bootstrap_port"] = int(
+            getattr(args, "pd_bootstrap_port", 8998)
+        )
+    bench_backend = create_bench_backend(
+        backend, input_format=input_format, **backend_kwargs
+    )
 
     prefill_isl_points = [int(x) for x in args.prefill_isl_points.split(",")]
     decode_isl_points = [int(x) for x in args.decode_isl_points.split(",")]

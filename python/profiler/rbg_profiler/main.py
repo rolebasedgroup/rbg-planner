@@ -59,6 +59,28 @@ def main():
     # Hidden alias for backward compatibility.
     parser.add_argument("--engine", dest="backend", help=argparse.SUPPRESS)
 
+    # --input-format selects the prompt form used by bench requests.
+    # "auto" keeps each backend's default (token_ids for completions
+    # backends, text for chat backends); "text" sends tokenizer-decoded
+    # strings (required by routers such as SMG that reject token ID
+    # prompts); "token_ids" sends raw token ID arrays.
+    parser.add_argument(
+        "--input-format",
+        choices=["auto", "text", "token_ids"],
+        default=os.environ.get("INPUT_FORMAT", "auto"),
+        help="Prompt input form for bench requests (default: auto)",
+    )
+
+    # Prefill engine's --disaggregation-bootstrap-port, used by the
+    # sglang-pd-native backend when attaching bootstrap fields to PD requests.
+    parser.add_argument(
+        "--pd-bootstrap-port",
+        type=int,
+        default=int(os.environ.get("PD_BOOTSTRAP_PORT", "8998")),
+        help="Prefill engine disaggregation bootstrap port "
+             "(sglang-pd-native backend only)",
+    )
+
     parser.add_argument(
         "--prefill-role-name",
         default=os.environ.get("PREFILL_ROLE_NAME", "prefill"),
@@ -165,7 +187,10 @@ def main():
         sys.exit(1)
 
     try:
-        asyncio.run(run_profiling(args, prefill_endpoint, decode_endpoint, backend=args.backend))
+        asyncio.run(run_profiling(
+            args, prefill_endpoint, decode_endpoint,
+            backend=args.backend, input_format=args.input_format,
+        ))
     except Exception as e:
         logger.error(f"Profiling failed: {e}", exc_info=True)
         sys.exit(1)

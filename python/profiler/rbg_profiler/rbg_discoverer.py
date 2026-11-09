@@ -25,8 +25,12 @@ RBG_VERSION = "v1alpha2"
 RBG_PLURAL = "rolebasedgroups"
 
 # Default ports per engine type. Must stay in sync with DEFAULT_PORTS
-# in bench_serving.py.
+# in bench_serving.py. Matching uses startswith in dict order, so more
+# specific prefixes must come first ("sglang-pd-native" before "sglang").
 ENGINE_DEFAULT_PORTS = {
+    # PD-native engines listen on the engine port (e.g. 8000/8001), not the
+    # router port 30000; each role's --port argument takes precedence.
+    "sglang-pd-native": 8000,
     "sglang": 30000,
     "sglang-native": 30000,
     "sglang-oai": 30000,

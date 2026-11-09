@@ -50,6 +50,8 @@ _BACKEND_API_PATHS = {
 }
 
 DEFAULT_PORTS = {
+    # Keep in sync with ENGINE_DEFAULT_PORTS in rbg_discoverer.py.
+    "sglang-pd-native": 8000,
     "sglang": 30000,
     "sglang-native": 30000,
     "sglang-oai": 30000,

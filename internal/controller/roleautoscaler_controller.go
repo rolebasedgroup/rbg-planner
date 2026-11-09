@@ -219,30 +219,31 @@ func (r *AutoScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 
 // parsedSpec holds the parsed AutoScaler spec fields.
 type parsedSpec struct {
-	scalingInterval     int
-	backend             string
-	prefillRoleName     string
-	decodeRoleName      string
-	prefillMinReplicas  int32
-	prefillMaxReplicas  int32
-	decodeMinReplicas   int32
-	decodeMaxReplicas   int32
-	plannerImage        string
-	modelName           string
-	ttft                float64
-	itl                 float64
-	loadPredictor       string
-	predictionWindow    int
-	noCorrection        bool
-	dryRun              bool
-	profilingImage      string
-	metricSource        string
-	metricsPort         int
-	prometheusEndpoint  string
-	modelCachePVCName   string
-	modelCacheModelPath string
-	modelCacheMountPath string
-	imagePullSecrets    []corev1.LocalObjectReference
+	scalingInterval      int
+	backend              string
+	prefillRoleName      string
+	decodeRoleName       string
+	prefillMinReplicas   int32
+	prefillMaxReplicas   int32
+	decodeMinReplicas    int32
+	decodeMaxReplicas    int32
+	plannerImage         string
+	modelName            string
+	ttft                 float64
+	itl                  float64
+	loadPredictor        string
+	predictionWindow     int
+	noCorrection         bool
+	dryRun               bool
+	profilingImage       string
+	profilingInputFormat string
+	metricSource         string
+	metricsPort          int
+	prometheusEndpoint   string
+	modelCachePVCName    string
+	modelCacheModelPath  string
+	modelCacheMountPath  string
+	imagePullSecrets     []corev1.LocalObjectReference
 }
 
 func (r *AutoScalerReconciler) parseRASSpec(ras *unstructured.Unstructured) (*parsedSpec, error) {
@@ -309,6 +310,7 @@ func (r *AutoScalerReconciler) parseRASSpec(ras *unstructured.Unstructured) (*pa
 		profilerDefault = defaultProfilerImage
 	}
 	s.profilingImage = getStrField(prof, "image", profilerDefault)
+	s.profilingInputFormat = getStrField(prof, "inputFormat", "auto")
 
 	// modelSource
 	if mc, ok := prof["modelSource"].(map[string]interface{}); ok && mc != nil {
@@ -560,6 +562,11 @@ func (r *AutoScalerReconciler) createProfilingJob(ctx context.Context, ras *unst
 	}
 	if tokenizerPath != "" {
 		args = append(args, "--tokenizer", tokenizerPath)
+	}
+	// Only pass --input-format when explicitly configured; "auto" is the
+	// profiler's default and lets each bench backend pick its preferred form.
+	if spec.profilingInputFormat != "" && spec.profilingInputFormat != "auto" {
+		args = append(args, "--input-format", spec.profilingInputFormat)
 	}
 
 	backoffLimit := int32(1)

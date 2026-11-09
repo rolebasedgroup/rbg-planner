@@ -74,3 +74,71 @@ async def test_profile_prefill_uses_backend(mock_endpoint, mock_args, mock_metri
 
     mock_backend.bench_prefill.assert_called_once()
     mock_backend.bench_decode.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_run_profiling_passes_input_format(mock_endpoint, mock_args, mock_metrics):
+    """run_profiling forwards input_format to create_bench_backend."""
+    from rbg_profiler.profiler import run_profiling
+
+    mock_backend = MagicMock()
+    mock_backend.bench_prefill = AsyncMock(return_value=[])
+    mock_backend.bench_decode = AsyncMock(return_value=[])
+
+    with patch(
+        "rbg_profiler.profiler.create_bench_backend", return_value=mock_backend
+    ) as mock_create:
+        await run_profiling(
+            mock_args, mock_endpoint, mock_endpoint,
+            backend="sglang-oai", input_format="text",
+        )
+
+    mock_create.assert_called_once_with(
+        "sglang-oai", input_format="text"
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_profiling_passes_bootstrap_port_for_pd_native(mock_endpoint, mock_args):
+    """sglang-pd-native receives --pd-bootstrap-port via constructor kwargs."""
+    from rbg_profiler.profiler import run_profiling
+
+    mock_backend = MagicMock()
+    mock_backend.bench_prefill = AsyncMock(return_value=[])
+    mock_backend.bench_decode = AsyncMock(return_value=[])
+    mock_args.pd_bootstrap_port = 9100
+
+    with patch(
+        "rbg_profiler.profiler.create_bench_backend", return_value=mock_backend
+    ) as mock_create:
+        await run_profiling(
+            mock_args, mock_endpoint, mock_endpoint,
+            backend="sglang-pd-native", input_format="auto",
+        )
+
+    mock_create.assert_called_once_with(
+        "sglang-pd-native", input_format="auto", bootstrap_port=9100
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_profiling_no_backend_kwargs_for_non_pd(mock_endpoint, mock_args):
+    """Non-PD backends do not receive PD-specific constructor kwargs."""
+    from rbg_profiler.profiler import run_profiling
+
+    mock_backend = MagicMock()
+    mock_backend.bench_prefill = AsyncMock(return_value=[])
+    mock_backend.bench_decode = AsyncMock(return_value=[])
+    mock_args.pd_bootstrap_port = 9100
+
+    with patch(
+        "rbg_profiler.profiler.create_bench_backend", return_value=mock_backend
+    ) as mock_create:
+        await run_profiling(
+            mock_args, mock_endpoint, mock_endpoint,
+            backend="sglang-oai", input_format="auto",
+        )
+
+    mock_create.assert_called_once_with(
+        "sglang-oai", input_format="auto"
+    )

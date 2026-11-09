@@ -24,10 +24,17 @@ class SGLangBenchBackend(BaseBenchBackend):
     api_path = "/v1/completions"
     default_port = 30000
 
-    def _build_request_payload(self, prompt, model, osl, **kwargs):
+    def _build_request_payload(self, prompt, model, osl, prompt_text="", **kwargs):
+        # Send the decoded text when the resolved input format is "text"
+        # (e.g. behind routers that only accept string prompts); otherwise
+        # send the raw token ID array.
+        if self.input_format == "text" and prompt_text:
+            prompt_value = prompt_text
+        else:
+            prompt_value = prompt
         return {
             "model": model,
-            "prompt": prompt,
+            "prompt": prompt_value,
             "best_of": 1,
             "max_tokens": osl,
             "stream": True,
@@ -41,7 +48,10 @@ class SGLangBenchBackend(BaseBenchBackend):
     ) -> RequestFuncOutput:
         output = RequestFuncOutput()
         payload = self._build_request_payload(
-            prompt=request.prompt, model=request.model, osl=request.output_len,
+            prompt=request.prompt,
+            prompt_text=request.prompt_text,
+            model=request.model,
+            osl=request.output_len,
         )
         st = time.perf_counter()
         most_recent_timestamp = st
@@ -97,11 +107,16 @@ class SGLangChatBenchBackend(BaseBenchBackend):
 
     api_path = "/v1/chat/completions"
     default_port = 30000
+    # Chat APIs take string content, so prefer decoded text prompts.
+    preferred_input_form = "text"
 
-    def _build_request_payload(self, prompt, model, osl, **kwargs):
+    def _build_request_payload(self, prompt, model, osl, prompt_text="", **kwargs):
+        # Chat payloads are strings by construction; consume prompt_text when
+        # available and fall back to the raw prompt value otherwise.
+        content = prompt_text if (self.input_format == "text" and prompt_text) else prompt
         return {
             "model": model,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [{"role": "user", "content": content}],
             "max_completion_tokens": osl,
             "stream": True,
             "stream_options": {"include_usage": True},
@@ -114,7 +129,10 @@ class SGLangChatBenchBackend(BaseBenchBackend):
     ) -> RequestFuncOutput:
         output = RequestFuncOutput()
         payload = self._build_request_payload(
-            prompt=request.prompt, model=request.model, osl=request.output_len,
+            prompt=request.prompt,
+            prompt_text=request.prompt_text,
+            model=request.model,
+            osl=request.output_len,
         )
         st = time.perf_counter()
         most_recent_timestamp = st

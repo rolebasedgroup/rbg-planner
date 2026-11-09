@@ -170,6 +170,17 @@ type SLAConfig struct {
 
 // ProfilingConfig defines profiling Job configuration.
 type ProfilingConfig struct {
+	// InputFormat selects the prompt input form used by profiling bench
+	// requests. "text" sends tokenizer-decoded prompt strings (required by
+	// routers such as SMG that only accept string prompts), "token_ids" sends
+	// token ID arrays, and "auto" (default) lets the bench backend choose its
+	// preferred form (token_ids for completions backends, text for chat
+	// backends).
+	// +optional
+	// +kubebuilder:default="auto"
+	// +kubebuilder:validation:Enum=auto;text;token_ids
+	InputFormat string `json:"inputFormat,omitempty"`
+
 	// Image is the container image for the profiling tool.
 	// If empty, a default image is used.
 	// +optional

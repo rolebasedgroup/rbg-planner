@@ -48,6 +48,10 @@ spec:
 
       profiling:
         image: "ghcr.io/rolebasedgroup/rbg-profiler:latest"
+        # Prompt input form for bench requests: auto (backend default),
+        # text (decoded strings, required by routers such as SMG), or
+        # token_ids (raw token ID arrays).
+        inputFormat: "auto"
         # modelSource mounts a PVC with pre-downloaded model weights and
         # tokenizer files. When omitted, the profiler falls back to
         # downloading the tokenizer from HuggingFace using modelName.
