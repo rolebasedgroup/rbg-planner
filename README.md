@@ -55,7 +55,7 @@ The planner uses a pluggable **Metrics Adapter** module to query Prometheus. Eac
 | `DynamoAdapter` | NVIDIA Dynamo | ISL/OSL from histograms, label `model` |
 | `PatioAdapter` | Patio | ISL/OSL from counter ratios, label `model_name` |
 
-Configured via `metricsEndpoint.metricSource` in the AutoScaler CR. To add a new engine, implement `MetricsAdapter` in `python/planner/rbg_planner/metrics/` and register it in `ADAPTERS`.
+Configured via `metrics.metricSource` in the AutoScaler CR. To add a new engine, implement `MetricsAdapter` in `python/planner/rbg_planner/metrics/` and register it in `ADAPTERS`.
 
 ### Extensible Scaling Engine
 
@@ -64,8 +64,8 @@ The CRD `spec.implementation` is a discriminated union -- each field represents 
 ```yaml
 spec:
   implementation:
-    DynamoPlanner: { ... }    # Built-in: SLA-driven planner from NVIDIA Dynamo
-    # YourScaler: { ... }     # Add your own scaling engine here
+    dynamoPlanner: { ... }   # Built-in: SLA-driven planner derived from NVIDIA Dynamo
+    # YourScaler: { ... }    # Add your own scaling engine here
 ```
 
 `DynamoPlanner` is the built-in engine that ships with this project. To add a new scaling engine:
@@ -130,10 +130,12 @@ metadata:
   name: sglang-pd-inference    # must match the RBG name
   namespace: inference
 spec:
-  scalingInterval: 180
+  scalingInterval: 180    # seconds between scaling decisions
+  backend: sglang-oai     # inference engine backend (profiling bench + metrics)
 
+  # Scaling pattern: pdDisaggregated (supported) | unified (reserved, not yet implemented)
   pattern:
-    PDDisaggregated:
+    pdDisaggregated:
       prefill:
         roleName: prefill
         maxReplicas: 10
@@ -143,22 +145,53 @@ spec:
         maxReplicas: 10
         minReplicas: 1
 
+  # Scaling engine
   implementation:
-    DynamoPlanner:
+    dynamoPlanner:
       modelName: "Qwen/Qwen3-0.6B"
-      ttft: 200.0
-      itl: 20.0
-      loadPredictor: arima
+
+      # SLA targets
+      sla:
+        ttft: 200.0        # target TTFT in milliseconds
+        itl: 20.0          # target ITL in milliseconds
+
+      # Load prediction
+      loadPredictor: arima # arima | constant | prophet
       predictionWindow: 50
-      noCorrection: false
-      dryRun: false
+      noCorrection: false  # disable SLA correction factors
+      dryRun: false        # observe only, no actual scaling
+
+      # Private registry credentials, applied to both the profiling Job
+      # and the planner Deployment
+      imagePullSecrets:
+        - name: regcred
 
       profiling:
         image: "ghcr.io/rolebasedgroup/rbg-profiler:latest"
+        # Prompt input form for bench requests: auto | text | token_ids
+        inputFormat: "auto"
+        # Optional: mount a PVC with pre-downloaded model weights and
+        # tokenizer files. When omitted, the profiler downloads the
+        # tokenizer from HuggingFace using modelName.
+        modelSource:
+          pvcName: "model-weights"
+          modelPath: "deepseek-r1"
+          mountPath: "/opt/model"
 
-      metricsEndpoint:
+      # Metrics configuration
+      metrics:
         metricSource: sglang
         port: 9091
+        # Optional: per-CR override of the operator-level Prometheus query endpoint
+        # endpoint: "https://prometheus.example.com"
+        # Optional: credentials for the query endpoint (one mechanism only)
+        # authentication:
+        #   basicAuth:
+        #     username: { name: prometheus-auth, key: username }
+        #     password: { name: prometheus-auth, key: password }
+        #   # or bearer token
+        #   bearer:
+        #     token: { name: prometheus-auth, key: token }
 ```
 
 ```bash
@@ -199,22 +232,31 @@ INFO  Scaling role decode: 1 -> 4
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `spec.scalingInterval` | int | `180` | Seconds between scaling decisions |
-| `spec.pattern.PDDisaggregated.prefill.roleName` | string | `prefill` | Prefill role name in the RBG |
-| `spec.pattern.PDDisaggregated.prefill.minReplicas` | int | `1` | Minimum prefill replicas |
-| `spec.pattern.PDDisaggregated.prefill.maxReplicas` | int | (required) | Maximum prefill replicas |
-| `spec.pattern.PDDisaggregated.decode.roleName` | string | `decode` | Decode role name in the RBG |
-| `spec.pattern.PDDisaggregated.decode.minReplicas` | int | `1` | Minimum decode replicas |
-| `spec.pattern.PDDisaggregated.decode.maxReplicas` | int | (required) | Maximum decode replicas |
-| `spec.implementation.DynamoPlanner.modelName` | string | (required) | Model name for Prometheus label filtering |
-| `spec.implementation.DynamoPlanner.ttft` | float | `500.0` | Target TTFT SLA (ms) |
-| `spec.implementation.DynamoPlanner.itl` | float | `50.0` | Target ITL SLA (ms) |
-| `spec.implementation.DynamoPlanner.loadPredictor` | string | `arima` | Load predictor: `arima`, `constant`, `prophet` |
-| `spec.implementation.DynamoPlanner.predictionWindow` | int | `50` | Data points in predictor window |
-| `spec.implementation.DynamoPlanner.noCorrection` | bool | `false` | Disable SLA correction factors |
-| `spec.implementation.DynamoPlanner.dryRun` | bool | `false` | Observe only, no actual scaling |
-| `spec.implementation.DynamoPlanner.profiling.image` | string | (hardcoded default) | Profiling tool container image |
-| `spec.implementation.DynamoPlanner.metricsEndpoint.metricSource` | string | `sglang` | Metric source: `sglang`, `vllm`, `patio` |
-| `spec.implementation.DynamoPlanner.metricsEndpoint.port` | int | `9091` | Planner Prometheus metrics port |
+| `spec.backend` | string | `sglang-oai` | Inference engine backend used by both profiling (bench) and metrics collection, e.g. `sglang-oai`, `vllm`, `vllm-chat` |
+| `spec.pattern.pdDisaggregated.prefill.roleName` | string | (required) | Prefill role name in the RBG |
+| `spec.pattern.pdDisaggregated.prefill.maxReplicas` | int | (required) | Maximum prefill replicas |
+| `spec.pattern.pdDisaggregated.prefill.minReplicas` | int | `1` | Minimum prefill replicas |
+| `spec.pattern.pdDisaggregated.decode.roleName` | string | (required) | Decode role name in the RBG |
+| `spec.pattern.pdDisaggregated.decode.maxReplicas` | int | (required) | Maximum decode replicas |
+| `spec.pattern.pdDisaggregated.decode.minReplicas` | int | `1` | Minimum decode replicas |
+| `spec.implementation.dynamoPlanner.modelName` | string | (required) | Model name for Prometheus label filtering and tokenizer resolution |
+| `spec.implementation.dynamoPlanner.sla.ttft` | float | `500` | Target TTFT SLA (ms) |
+| `spec.implementation.dynamoPlanner.sla.itl` | float | `50` | Target ITL SLA (ms) |
+| `spec.implementation.dynamoPlanner.loadPredictor` | string | `arima` | Load predictor: `arima`, `constant`, `prophet` |
+| `spec.implementation.dynamoPlanner.predictionWindow` | int | `50` | Data points in predictor window |
+| `spec.implementation.dynamoPlanner.noCorrection` | bool | `false` | Disable SLA correction factors |
+| `spec.implementation.dynamoPlanner.dryRun` | bool | `false` | Observe only, no actual scaling |
+| `spec.implementation.dynamoPlanner.imagePullSecrets` | list | (empty) | Secrets for pulling profiling/planner images from private registries |
+| `spec.implementation.dynamoPlanner.profiling.inputFormat` | string | `auto` | Prompt input form for bench requests: `auto`, `text`, `token_ids` |
+| `spec.implementation.dynamoPlanner.profiling.image` | string | (hardcoded default) | Profiling tool container image |
+| `spec.implementation.dynamoPlanner.profiling.modelSource.pvcName` | string | (empty) | PVC containing model weights and tokenizer files (same namespace as the AutoScaler) |
+| `spec.implementation.dynamoPlanner.profiling.modelSource.modelPath` | string | (empty) | Path to the model/tokenizer directory within the PVC |
+| `spec.implementation.dynamoPlanner.profiling.modelSource.mountPath` | string | `/opt/model` | Mount path for the PVC inside the profiler container |
+| `spec.implementation.dynamoPlanner.metrics.metricSource` | string | `sglang` | Metric source: `sglang`, `vllm`, `patio` |
+| `spec.implementation.dynamoPlanner.metrics.port` | int | `9091` | Planner Prometheus metrics exposition port |
+| `spec.implementation.dynamoPlanner.metrics.endpoint` | string | (operator-level Helm value) | Per-CR override of the Prometheus query endpoint |
+| `spec.implementation.dynamoPlanner.metrics.authentication.basicAuth` | object | (empty) | HTTP Basic credentials for the query endpoint (SecretKeySelector pair `username`/`password`) |
+| `spec.implementation.dynamoPlanner.metrics.authentication.bearer` | object | (empty) | Bearer token for the query endpoint (SecretKeySelector `token`); mutually exclusive with `basicAuth` |
 
 ### AutoScaler Status
 
