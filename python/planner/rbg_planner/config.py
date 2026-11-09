@@ -23,7 +23,8 @@ class PlannerConfig:
         "http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090",
     )
     backend: str = os.environ.get("BACKEND", "sglang-oai")
-    metric_source: str = os.environ.get("METRIC_SOURCE", "")  # sglang | vllm | patio | dynamo
+    metric_engine: str = os.environ.get("METRIC_ENGINE", "")  # sglang | vllm | patio | dynamo
+    metric_queries_json: str = os.environ.get("METRIC_QUERIES_JSON", "")
     model_name: str = os.environ.get("MODEL_NAME", "")
 
     # Planner parameters
@@ -52,7 +53,8 @@ class PlannerConfig:
     def __init__(self):
         # Re-read from environment so tests using patch.dict(os.environ) work.
         self.backend = os.environ.get("BACKEND", "sglang-oai")
-        self.metric_source = os.environ.get("METRIC_SOURCE", "")
-        # Derive metric_source from backend if not explicitly set.
-        if not self.metric_source:
-            self.metric_source = self.backend.split("-", 1)[0]
+        self.metric_engine = os.environ.get("METRIC_ENGINE", "")
+        self.metric_queries_json = os.environ.get("METRIC_QUERIES_JSON", "")
+        # Derive metric_engine from backend if not explicitly set.
+        if not self.metric_engine:
+            self.metric_engine = self.backend.split("-", 1)[0]

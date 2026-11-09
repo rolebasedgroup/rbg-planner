@@ -46,16 +46,18 @@ The core planning algorithm, SLA profiling methodology, and performance interpol
 
 ### Metrics Adapter
 
-The planner uses a pluggable **Metrics Adapter** module to query Prometheus. Each inference engine exposes metrics in a different format -- the adapter normalizes them into a unified interface so the scaling logic is engine-agnostic.
+The planner uses a config-driven **Metrics Adapter** module to query Prometheus. Each inference engine exposes metrics in a different format -- the adapter normalizes them into a unified interface so the scaling logic is engine-agnostic.
 
-| Adapter | Engine | Differences |
-|---------|--------|-------------|
-| `SGLangAdapter` | SGLang | ISL/OSL from counter ratios, label `model_name` |
-| `VLLMAdapter` | vLLM | ISL/OSL from counter ratios, label `model_name` |
-| `DynamoAdapter` | NVIDIA Dynamo | ISL/OSL from histograms, label `model` |
-| `PatioAdapter` | Patio | ISL/OSL from counter ratios, label `model_name` |
+Queries are resolved **per logical metric slot** (`ttft`, `itl`, `requestsTotal`, `requestDuration`, `isl`, `osl`). Built-in engine presets ship complete PromQL templates per slot; `metrics.queries` in the CRD overrides individual slots, KEDA-style.
 
-Configured via `metrics.metricSource` in the AutoScaler CR. To add a new engine, implement `MetricsAdapter` in `python/planner/rbg_planner/metrics/` and register it in `ADAPTERS`.
+| Engine | ISL/OSL query | Model label |
+|--------|---------------|-------------|
+| SGLang | counter ratio | `model_name` |
+| vLLM | counter ratio | `model_name` |
+| NVIDIA Dynamo | histogram | `model` |
+| Patio | counter ratio | `model_name` |
+
+Configured via `metrics.engine` in the AutoScaler CR. See [docs/metrics.md](docs/metrics.md) for the full query mapping guide -- slot semantics, placeholder expansion, per-slot overrides, and custom engines.
 
 ### Extensible Scaling Engine
 
@@ -180,7 +182,7 @@ spec:
 
       # Metrics configuration
       metrics:
-        metricSource: sglang
+        engine: sglang
         port: 9091
         # Optional: per-CR override of the operator-level Prometheus query endpoint
         # endpoint: "https://prometheus.example.com"
@@ -192,6 +194,10 @@ spec:
         #   # or bearer token
         #   bearer:
         #     token: { name: prometheus-auth, key: token }
+        # Optional: per-slot PromQL overrides. Slots: ttft, itl, requestsTotal,
+        # requestDuration, isl, osl. Omitted slots use the engine preset.
+        # queries:
+        #   ttft: 'sum(increase(my_ttft_seconds_sum{modelFilter}[{interval}])) / sum(increase(my_ttft_seconds_count{modelFilter}[{interval}]))'
 ```
 
 ```bash
@@ -252,9 +258,10 @@ INFO  Scaling role decode: 1 -> 4
 | `spec.implementation.dynamoPlanner.profiling.modelSource.pvcName` | string | (empty) | PVC containing model weights and tokenizer files (same namespace as the AutoScaler) |
 | `spec.implementation.dynamoPlanner.profiling.modelSource.modelPath` | string | (empty) | Path to the model/tokenizer directory within the PVC |
 | `spec.implementation.dynamoPlanner.profiling.modelSource.mountPath` | string | `/opt/model` | Mount path for the PVC inside the profiler container |
-| `spec.implementation.dynamoPlanner.metrics.metricSource` | string | `sglang` | Metric source: `sglang`, `vllm`, `patio` |
+| `spec.implementation.dynamoPlanner.metrics.engine` | string | `sglang` | Metrics engine preset: `sglang`, `vllm`, `dynamo`, `patio` |
 | `spec.implementation.dynamoPlanner.metrics.port` | int | `9091` | Planner Prometheus metrics exposition port |
 | `spec.implementation.dynamoPlanner.metrics.endpoint` | string | (operator-level Helm value) | Per-CR override of the Prometheus query endpoint |
+| `spec.implementation.dynamoPlanner.metrics.queries` | map | (engine preset) | Per-slot PromQL overrides. Keys: `ttft`, `itl`, `requestsTotal`, `requestDuration`, `isl`, `osl`. Values may use `{modelFilter}` and `{interval}` placeholders; a custom engine must provide all six |
 | `spec.implementation.dynamoPlanner.metrics.authentication.basicAuth` | object | (empty) | HTTP Basic credentials for the query endpoint (SecretKeySelector pair `username`/`password`) |
 | `spec.implementation.dynamoPlanner.metrics.authentication.bearer` | object | (empty) | Bearer token for the query endpoint (SecretKeySelector `token`); mutually exclusive with `basicAuth` |
 

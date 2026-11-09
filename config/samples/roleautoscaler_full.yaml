@@ -62,7 +62,7 @@ spec:
 
       # Metrics configuration
       metrics:
-        metricSource: sglang
+        engine: sglang
         port: 9091
         # Optional: override the operator-level Prometheus query endpoint.
         # endpoint: https://sls-prometheus.example.com/prometheus/workspace
@@ -81,3 +81,10 @@ spec:
         #     token:
         #       name: prometheus-auth
         #       key: token
+        # Optional: per-slot PromQL query overrides. Slots: ttft, itl,
+        # requestsTotal, requestDuration, isl, osl. Omitted slots fall back
+        # to the engine preset. Values may use {modelFilter} (model label
+        # matcher from modelName) and {interval} (adjustment interval)
+        # placeholders. A custom engine name must provide all six slots.
+        # queries:
+        #   ttft: 'sum(increase(my_ttft_seconds_sum{modelFilter}[{interval}])) / sum(increase(my_ttft_seconds_count{modelFilter}[{interval}]))'

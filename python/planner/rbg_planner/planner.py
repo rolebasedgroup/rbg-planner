@@ -11,6 +11,7 @@ Scales RBG roles via RBGConnector based on predicted load and SLA targets.
 """
 
 import asyncio
+import json
 import logging
 import math
 import time
@@ -173,9 +174,21 @@ class Planner:
             )
 
         # Metrics adapter for querying inference metrics
+        queries = None
+        if config.metric_queries_json:
+            try:
+                queries = json.loads(config.metric_queries_json)
+            except json.JSONDecodeError as e:
+                logger.error(f"Invalid METRIC_QUERIES_JSON, ignoring: {e}")
+            if not isinstance(queries, dict):
+                logger.error("METRIC_QUERIES_JSON is not a JSON object, ignoring")
+                queries = None
         self.metrics_client = create_metrics_adapter(
-            source=config.metric_source,
+            engine=config.metric_engine,
             prometheus_url=config.prometheus_endpoint,
+            queries=queries,
+            model_name=config.model_name or None,
+            interval=f"{config.adjustment_interval}s",
         )
 
         # Load predictors
@@ -226,16 +239,13 @@ class Planner:
         num_d = self._get_num_workers(self.config.decode_role_name)
         logger.info(f"Workers: prefill={num_p}, decode={num_d}")
 
-        interval = f"{self.config.adjustment_interval}s"
-        model = self.config.model_name or None
-
         # Adapter returns seconds, convert to milliseconds for TTFT/ITL
-        self.last_metrics.ttft = self.metrics_client.get_avg_ttft(interval, model) * 1000
-        self.last_metrics.itl = self.metrics_client.get_avg_itl(interval, model) * 1000
-        self.last_metrics.num_req = self.metrics_client.get_request_count(interval, model)
-        self.last_metrics.request_duration = self.metrics_client.get_avg_request_duration(interval, model)
-        self.last_metrics.isl = self.metrics_client.get_avg_isl(interval, model)
-        self.last_metrics.osl = self.metrics_client.get_avg_osl(interval, model)
+        self.last_metrics.ttft = self.metrics_client.get_avg_ttft() * 1000
+        self.last_metrics.itl = self.metrics_client.get_avg_itl() * 1000
+        self.last_metrics.num_req = self.metrics_client.get_request_count()
+        self.last_metrics.request_duration = self.metrics_client.get_avg_request_duration()
+        self.last_metrics.isl = self.metrics_client.get_avg_isl()
+        self.last_metrics.osl = self.metrics_client.get_avg_osl()
 
         logger.info(
             f"Observed: num_req={self.last_metrics.num_req:.2f} "

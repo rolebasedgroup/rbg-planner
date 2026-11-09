@@ -25,11 +25,16 @@ def parse_args() -> argparse.Namespace:
     # Prometheus
     parser.add_argument("--prometheus-endpoint", type=str, default=None, help="Prometheus URL")
     parser.add_argument(
-        "--metric-source",
+        "--metric-engine",
         type=str,
         default=None,
-        choices=["sglang", "vllm", "patio"],
-        help="Metric source (sglang, vllm, patio)",
+        help="Metrics engine (sglang, vllm, dynamo, patio, or a custom engine name)",
+    )
+    parser.add_argument(
+        "--metric-queries-json",
+        type=str,
+        default=None,
+        help='JSON object of per-slot PromQL query overrides (e.g. {"ttft": "..."})',
     )
     parser.add_argument("--model-name", type=str, default=None, help="Model name for metric filtering")
 
@@ -64,56 +69,37 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def build_config(args: argparse.Namespace) -> PlannerConfig:  # noqa: C901
-    """Build PlannerConfig from CLI args (override) + env vars (default).
-
-    Complexity is high because each config field is individually overridden from
-    CLI args when provided. This explicit one-field-at-a-time pattern is clearer
-    than a generic getattr/setattr loop and is intentionally kept readable.
-    """
+def build_config(args: argparse.Namespace) -> PlannerConfig:
+    """Build PlannerConfig from CLI args (override) + env vars (default)."""
     config = PlannerConfig()
 
     # CLI args override env vars
-    if args.rbg_name is not None:
-        config.rbg_name = args.rbg_name
-    if args.rbg_namespace is not None:
-        config.rbg_namespace = args.rbg_namespace
-    if args.prefill_role_name is not None:
-        config.prefill_role_name = args.prefill_role_name
-    if args.decode_role_name is not None:
-        config.decode_role_name = args.decode_role_name
-    if args.prometheus_endpoint is not None:
-        config.prometheus_endpoint = args.prometheus_endpoint
-    if args.metric_source is not None:
-        config.metric_source = args.metric_source
-    if args.model_name is not None:
-        config.model_name = args.model_name
-    if args.adjustment_interval is not None:
-        config.adjustment_interval = args.adjustment_interval
-    if args.max_gpu_budget is not None:
-        config.max_gpu_budget = args.max_gpu_budget
-    if args.min_replicas is not None:
-        config.min_replicas = args.min_replicas
-    if args.prefill_engine_num_gpu is not None:
-        config.prefill_engine_num_gpu = args.prefill_engine_num_gpu
-    if args.decode_engine_num_gpu is not None:
-        config.decode_engine_num_gpu = args.decode_engine_num_gpu
-    if args.ttft_sla is not None:
-        config.ttft_sla = args.ttft_sla
-    if args.itl_sla is not None:
-        config.itl_sla = args.itl_sla
-    if args.load_predictor is not None:
-        config.load_predictor = args.load_predictor
-    if args.load_prediction_window_size is not None:
-        config.load_prediction_window_size = args.load_prediction_window_size
-    if args.no_correction is not None:
-        config.no_correction = args.no_correction
-    if args.profile_results_dir is not None:
-        config.profile_results_dir = args.profile_results_dir
-    if args.planner_prometheus_port is not None:
-        config.planner_prometheus_port = args.planner_prometheus_port
-    if args.no_operation is not None:
-        config.no_operation = args.no_operation
+    overrides = {
+        "rbg_name": args.rbg_name,
+        "rbg_namespace": args.rbg_namespace,
+        "prefill_role_name": args.prefill_role_name,
+        "decode_role_name": args.decode_role_name,
+        "prometheus_endpoint": args.prometheus_endpoint,
+        "metric_engine": args.metric_engine,
+        "metric_queries_json": args.metric_queries_json,
+        "model_name": args.model_name,
+        "adjustment_interval": args.adjustment_interval,
+        "max_gpu_budget": args.max_gpu_budget,
+        "min_replicas": args.min_replicas,
+        "prefill_engine_num_gpu": args.prefill_engine_num_gpu,
+        "decode_engine_num_gpu": args.decode_engine_num_gpu,
+        "ttft_sla": args.ttft_sla,
+        "itl_sla": args.itl_sla,
+        "load_predictor": args.load_predictor,
+        "load_prediction_window_size": args.load_prediction_window_size,
+        "no_correction": args.no_correction,
+        "profile_results_dir": args.profile_results_dir,
+        "planner_prometheus_port": args.planner_prometheus_port,
+        "no_operation": args.no_operation,
+    }
+    for field, value in overrides.items():
+        if value is not None:
+            setattr(config, field, value)
 
     return config
 
@@ -134,7 +120,7 @@ def main():
         sys.exit(1)
 
     logger.info(f"RBG Planner starting for {config.rbg_name} in {config.rbg_namespace}")
-    logger.info(f"Metric source: {config.metric_source}, Model: {config.model_name or '(all)'}")
+    logger.info(f"Metrics engine: {config.metric_engine}, Model: {config.model_name or '(all)'}")
     logger.info(f"SLA targets: TTFT={config.ttft_sla}ms, ITL={config.itl_sla}ms")
 
     planner = Planner(config)

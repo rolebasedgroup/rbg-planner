@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -180,17 +181,36 @@ func (r *AutoScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	// 6. Handle Profiling.
-	// If profiling previously failed, stop reconciling to avoid loops.
-	// The user must delete and recreate the AutoScaler to retry.
-	if phase, _, _ := unstructured.NestedString(ras.Object, "status", "phase"); phase == "Failed" {
+	// If profiling previously failed, stop reconciling unless the spec
+	// generation has advanced (user edited the spec to fix the issue).
+	if shouldShortCircuitFailed(ras) {
 		return ctrl.Result{}, nil
 	}
 
 	profilingCMName, ready, err := r.handleProfiling(ctx, ras, spec)
 	if err != nil {
 		logger.Error(err, "profiling failed")
-		if err := r.setPhase(ctx, ras, "Failed", "ProfilingFailed", err.Error()); err != nil {
-			logger.Error(err, "failed to set phase")
+		// Record the generation at failure time and set Failed phase.
+		// Inline status update (not setPhase) to bypass dedup and ensure
+		// lastProfilingFailureGeneration is always persisted.
+		status, _ := ras.Object["status"].(map[string]interface{})
+		if status == nil {
+			status = map[string]interface{}{}
+		}
+		status["phase"] = "Failed"
+		status["lastProfilingFailureGeneration"] = ras.GetGeneration()
+		status["conditions"] = []interface{}{
+			map[string]interface{}{
+				"type":               "Ready",
+				"status":             "False",
+				"lastTransitionTime": metav1.Now().Format(time.RFC3339),
+				"reason":             "ProfilingFailed",
+				"message":            err.Error(),
+			},
+		}
+		ras.Object["status"] = status
+		if updateErr := r.Status().Update(ctx, ras); updateErr != nil {
+			logger.Error(updateErr, "failed to set phase")
 		}
 		return ctrl.Result{}, nil
 	}
@@ -238,8 +258,9 @@ type parsedSpec struct {
 	dryRun               bool
 	profilingImage       string
 	profilingInputFormat string
-	metricSource         string
+	metricEngine         string
 	metricsPort          int
+	metricQueriesJSON    string
 	prometheusEndpoint   string
 	// per-CR overrides from spec.implementation.dynamoPlanner.metrics
 	prometheusEndpointOverride string
@@ -327,11 +348,16 @@ func (r *AutoScalerReconciler) parseRASSpec(ras *unstructured.Unstructured) (*pa
 
 	// metrics
 	me, _ := dp["metrics"].(map[string]interface{})
-	s.metricSource = getStrField(me, "metricSource", "")
+	s.metricEngine = getStrField(me, "engine", "")
 	s.metricsPort = getIntField(me, "port", 9091)
 	s.prometheusEndpointOverride = getStrField(me, "endpoint", "")
 	if err := parseMetricsAuth(me, s); err != nil {
 		return nil, fmt.Errorf("metrics auth: %w", err)
+	}
+	if q, ok := me["queries"].(map[string]interface{}); ok && q != nil {
+		if b, err := json.Marshal(q); err == nil {
+			s.metricQueriesJSON = string(b)
+		}
 	}
 
 	// prometheusEndpoint
@@ -508,8 +534,10 @@ func (r *AutoScalerReconciler) handleProfiling(ctx context.Context, ras *unstruc
 			if delErr := r.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationForeground)); delErr != nil && !apierrors.IsNotFound(delErr) {
 				return "", false, fmt.Errorf("profiling job %s failed and cleanup failed: %w", jobName, delErr)
 			}
+			return "", false, fmt.Errorf("profiling job %s failed", jobName)
 		}
-		return "", false, fmt.Errorf("profiling job %s failed", jobName)
+		// Job is being deleted — wait for it to be gone before recreating.
+		return "", false, nil
 	}
 
 	// Still running.
@@ -732,10 +760,10 @@ func buildPlannerEnv(rbgName string, spec *parsedSpec, namespace string, maxGPUB
 		{Name: "PROFILE_RESULTS_DIR", Value: "/etc/rbg-planner/profiling"},
 		{Name: "PLANNER_PROMETHEUS_PORT", Value: strconv.Itoa(spec.metricsPort)},
 	}
-	// Only set METRIC_SOURCE when explicitly configured; otherwise the
+	// Only set METRIC_ENGINE when explicitly configured; otherwise the
 	// planner derives it from BACKEND (e.g. "sglang-oai" -> "sglang").
-	if spec.metricSource != "" {
-		env = append(env, corev1.EnvVar{Name: "METRIC_SOURCE", Value: spec.metricSource})
+	if spec.metricEngine != "" {
+		env = append(env, corev1.EnvVar{Name: "METRIC_ENGINE", Value: spec.metricEngine})
 	}
 	// Prometheus credentials: prefer the per-CR metrics secret selectors
 	// (never inlined into the pod spec); fall back to forwarding
@@ -764,6 +792,9 @@ func buildPlannerEnv(rbgName string, spec *parsedSpec, namespace string, maxGPUB
 		if v := os.Getenv("PROMETHEUS_PASSWORD"); v != "" {
 			env = append(env, corev1.EnvVar{Name: "PROMETHEUS_PASSWORD", Value: v})
 		}
+	}
+	if spec.metricQueriesJSON != "" {
+		env = append(env, corev1.EnvVar{Name: "METRIC_QUERIES_JSON", Value: spec.metricQueriesJSON})
 	}
 	return env
 }
@@ -1007,6 +1038,18 @@ func boolToConditionStatus(b bool) string {
 		return "True"
 	}
 	return "False"
+}
+
+// shouldShortCircuitFailed returns true when the AutoScaler is in Failed phase
+// and the spec generation has not advanced since the failure was recorded.
+// When false (generation advanced), the reconciler falls through to retry.
+func shouldShortCircuitFailed(ras *unstructured.Unstructured) bool {
+	phase, _, _ := unstructured.NestedString(ras.Object, "status", "phase")
+	if phase != "Failed" {
+		return false
+	}
+	lastFailGen, _, _ := unstructured.NestedInt64(ras.Object, "status", "lastProfilingFailureGeneration")
+	return ras.GetGeneration() <= lastFailGen
 }
 
 // Field extraction helpers for unstructured maps.
