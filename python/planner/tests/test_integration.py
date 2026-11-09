@@ -66,7 +66,7 @@ class TestGoldenJSONIntegration:
         query = mock_prom.custom_query.call_args.kwargs["query"]
         assert query == (
             'sum(increase(custom_prompt_tokens{model_name="Qwen"}[180s]))'
-            " / sum(increase(custom_requests{model_name=\"Qwen\"}[180s]))"
+            ' / sum(increase(custom_requests{model_name="Qwen"}[180s]))'
         )
 
         # 5. Unspecified slots fall back to the sglang preset.

@@ -44,7 +44,7 @@ class TestPresetResolution:
     def test_no_model_name_leaves_empty_matcher(self, mock_prom):
         adapter = create_metrics_adapter("sglang", "http://prom:9090")
         assert "{modelFilter}" not in adapter.queries["ttft"]
-        assert 'model_name=' not in adapter.queries["ttft"]
+        assert "model_name=" not in adapter.queries["ttft"]
 
 
 class TestSlotOverride:
