@@ -845,3 +845,163 @@ func TestEnsurePlannerDeployment_SetsImagePullSecrets(t *testing.T) {
 		t.Errorf("expected 'regcred', got %q", created.Spec.Template.Spec.ImagePullSecrets[0].Name)
 	}
 }
+
+func TestParseRASSpec_MetricsBasicAuth(t *testing.T) {
+	ras := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"spec": map[string]interface{}{
+				"pattern": map[string]interface{}{
+					"pdDisaggregated": map[string]interface{}{},
+				},
+				"implementation": map[string]interface{}{
+					"dynamoPlanner": map[string]interface{}{
+						"metrics": map[string]interface{}{
+							"endpoint": "https://sls.example.com/prometheus/ws",
+							"authentication": map[string]interface{}{
+								"basicAuth": map[string]interface{}{
+									"username": map[string]interface{}{"name": "prom-auth", "key": "user"},
+									"password": map[string]interface{}{"name": "prom-auth", "key": "pass"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	r := &AutoScalerReconciler{PrometheusEndpoint: "http://default:9090"}
+	spec, err := r.parseRASSpec(ras)
+	if err != nil {
+		t.Fatalf("parseRASSpec failed: %v", err)
+	}
+	if spec.prometheusEndpoint != "https://sls.example.com/prometheus/ws" {
+		t.Errorf("expected endpoint override, got %q", spec.prometheusEndpoint)
+	}
+	if spec.prometheusUsernameSecret == nil || spec.prometheusUsernameSecret.Name != "prom-auth" || spec.prometheusUsernameSecret.Key != "user" {
+		t.Errorf("username selector mismatch: %+v", spec.prometheusUsernameSecret)
+	}
+	if spec.prometheusPasswordSecret == nil || spec.prometheusPasswordSecret.Name != "prom-auth" || spec.prometheusPasswordSecret.Key != "pass" {
+		t.Errorf("password selector mismatch: %+v", spec.prometheusPasswordSecret)
+	}
+	if spec.prometheusTokenSecret != nil {
+		t.Errorf("expected no token secret, got %+v", spec.prometheusTokenSecret)
+	}
+
+	env := buildPlannerEnv("rbg", spec, "default", 8, 1, 1)
+	var user, pass *corev1.EnvVarSource
+	for _, e := range env {
+		switch e.Name {
+		case "PROMETHEUS_USERNAME":
+			user = e.ValueFrom
+		case "PROMETHEUS_PASSWORD":
+			pass = e.ValueFrom
+		}
+	}
+	if user == nil || user.SecretKeyRef == nil || user.SecretKeyRef.Name != "prom-auth" || user.SecretKeyRef.Key != "user" {
+		t.Errorf("expected PROMETHEUS_USERNAME secretKeyRef prom-auth/user, got %+v", user)
+	}
+	if pass == nil || pass.SecretKeyRef == nil || pass.SecretKeyRef.Name != "prom-auth" || pass.SecretKeyRef.Key != "pass" {
+		t.Errorf("expected PROMETHEUS_PASSWORD secretKeyRef prom-auth/pass, got %+v", pass)
+	}
+}
+
+func metricsAuthRAS(me map[string]interface{}) *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"spec": map[string]interface{}{
+				"pattern": map[string]interface{}{
+					"pdDisaggregated": map[string]interface{}{},
+				},
+				"implementation": map[string]interface{}{
+					"dynamoPlanner": map[string]interface{}{
+						"metrics": me,
+					},
+				},
+			},
+		},
+	}
+}
+
+func TestParseRASSpec_MetricsAuthRejectsInvalid(t *testing.T) {
+	cases := map[string]map[string]interface{}{
+		"basicAuth and bearer together": {
+			"authentication": map[string]interface{}{
+				"basicAuth": map[string]interface{}{
+					"username": map[string]interface{}{"name": "s", "key": "u"},
+					"password": map[string]interface{}{"name": "s", "key": "p"},
+				},
+				"bearer": map[string]interface{}{
+					"token": map[string]interface{}{"name": "s", "key": "t"},
+				},
+			},
+		},
+		"basicAuth username missing key": {
+			"authentication": map[string]interface{}{
+				"basicAuth": map[string]interface{}{
+					"username": map[string]interface{}{"name": "s"},
+					"password": map[string]interface{}{"name": "s", "key": "p"},
+				},
+			},
+		},
+		"basicAuth password missing": {
+			"authentication": map[string]interface{}{
+				"basicAuth": map[string]interface{}{
+					"username": map[string]interface{}{"name": "s", "key": "u"},
+				},
+			},
+		},
+		"bearer token missing key": {
+			"authentication": map[string]interface{}{
+				"bearer": map[string]interface{}{
+					"token": map[string]interface{}{"name": "s"},
+				},
+			},
+		},
+	}
+	for name, me := range cases {
+		r := &AutoScalerReconciler{}
+		if _, err := r.parseRASSpec(metricsAuthRAS(me)); err == nil {
+			t.Errorf("%s: expected error, got nil", name)
+		}
+	}
+}
+
+func TestParseRASSpec_MetricsBearerToken(t *testing.T) {
+	me := map[string]interface{}{
+		"authentication": map[string]interface{}{
+			"bearer": map[string]interface{}{
+				"token": map[string]interface{}{"name": "prom-auth", "key": "token"},
+			},
+		},
+	}
+	r := &AutoScalerReconciler{PrometheusEndpoint: "http://default:9090"}
+	spec, err := r.parseRASSpec(metricsAuthRAS(me))
+	if err != nil {
+		t.Fatalf("parseRASSpec failed: %v", err)
+	}
+	if spec.prometheusTokenSecret == nil || spec.prometheusTokenSecret.Name != "prom-auth" || spec.prometheusTokenSecret.Key != "token" {
+		t.Fatalf("token selector mismatch: %+v", spec.prometheusTokenSecret)
+	}
+	if spec.prometheusUsernameSecret != nil || spec.prometheusPasswordSecret != nil {
+		t.Fatalf("expected no basic auth selectors, got %+v/%+v", spec.prometheusUsernameSecret, spec.prometheusPasswordSecret)
+	}
+
+	env := buildPlannerEnv("rbg", spec, "default", 8, 1, 1)
+	var token *corev1.EnvVarSource
+	hasBasic := false
+	for _, e := range env {
+		switch e.Name {
+		case "PROMETHEUS_TOKEN":
+			token = e.ValueFrom
+		case "PROMETHEUS_USERNAME", "PROMETHEUS_PASSWORD":
+			hasBasic = true
+		}
+	}
+	if token == nil || token.SecretKeyRef == nil || token.SecretKeyRef.Name != "prom-auth" || token.SecretKeyRef.Key != "token" {
+		t.Errorf("expected PROMETHEUS_TOKEN secretKeyRef prom-auth/token, got %+v", token)
+	}
+	if hasBasic {
+		t.Error("bearer auth must not inject PROMETHEUS_USERNAME/PASSWORD")
+	}
+}

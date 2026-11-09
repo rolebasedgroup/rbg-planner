@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -240,10 +241,15 @@ type parsedSpec struct {
 	metricSource         string
 	metricsPort          int
 	prometheusEndpoint   string
-	modelCachePVCName    string
-	modelCacheModelPath  string
-	modelCacheMountPath  string
-	imagePullSecrets     []corev1.LocalObjectReference
+	// per-CR overrides from spec.implementation.dynamoPlanner.metrics
+	prometheusEndpointOverride string
+	prometheusUsernameSecret   *corev1.SecretKeySelector
+	prometheusPasswordSecret   *corev1.SecretKeySelector
+	prometheusTokenSecret      *corev1.SecretKeySelector
+	modelCachePVCName          string
+	modelCacheModelPath        string
+	modelCacheMountPath        string
+	imagePullSecrets           []corev1.LocalObjectReference
 }
 
 func (r *AutoScalerReconciler) parseRASSpec(ras *unstructured.Unstructured) (*parsedSpec, error) {
@@ -323,11 +329,18 @@ func (r *AutoScalerReconciler) parseRASSpec(ras *unstructured.Unstructured) (*pa
 	me, _ := dp["metrics"].(map[string]interface{})
 	s.metricSource = getStrField(me, "metricSource", "")
 	s.metricsPort = getIntField(me, "port", 9091)
+	s.prometheusEndpointOverride = getStrField(me, "endpoint", "")
+	if err := parseMetricsAuth(me, s); err != nil {
+		return nil, fmt.Errorf("metrics auth: %w", err)
+	}
 
 	// prometheusEndpoint
 	s.prometheusEndpoint = r.PrometheusEndpoint
 	if s.prometheusEndpoint == "" {
 		s.prometheusEndpoint = defaultPrometheusEndpoint
+	}
+	if s.prometheusEndpointOverride != "" {
+		s.prometheusEndpoint = s.prometheusEndpointOverride
 	}
 
 	return s, nil
@@ -724,6 +737,34 @@ func buildPlannerEnv(rbgName string, spec *parsedSpec, namespace string, maxGPUB
 	if spec.metricSource != "" {
 		env = append(env, corev1.EnvVar{Name: "METRIC_SOURCE", Value: spec.metricSource})
 	}
+	// Prometheus credentials: prefer the per-CR metrics secret selectors
+	// (never inlined into the pod spec); fall back to forwarding
+	// operator-level env so a single-credential install needs no CR
+	// configuration.
+	if spec.prometheusTokenSecret != nil {
+		env = append(env, corev1.EnvVar{
+			Name:      "PROMETHEUS_TOKEN",
+			ValueFrom: &corev1.EnvVarSource{SecretKeyRef: spec.prometheusTokenSecret},
+		})
+	} else if spec.prometheusUsernameSecret != nil {
+		env = append(env,
+			corev1.EnvVar{
+				Name:      "PROMETHEUS_USERNAME",
+				ValueFrom: &corev1.EnvVarSource{SecretKeyRef: spec.prometheusUsernameSecret},
+			},
+			corev1.EnvVar{
+				Name:      "PROMETHEUS_PASSWORD",
+				ValueFrom: &corev1.EnvVarSource{SecretKeyRef: spec.prometheusPasswordSecret},
+			},
+		)
+	} else {
+		if v := os.Getenv("PROMETHEUS_USERNAME"); v != "" {
+			env = append(env, corev1.EnvVar{Name: "PROMETHEUS_USERNAME", Value: v})
+		}
+		if v := os.Getenv("PROMETHEUS_PASSWORD"); v != "" {
+			env = append(env, corev1.EnvVar{Name: "PROMETHEUS_PASSWORD", Value: v})
+		}
+	}
 	return env
 }
 
@@ -979,6 +1020,57 @@ func getStrField(m map[string]interface{}, key, defaultVal string) string {
 		return defaultVal
 	}
 	return v
+}
+
+// parseMetricsAuth reads metrics.authentication.{basicAuth,bearer} and
+// enforces oneOf semantics: basicAuth (username+password) and bearer are
+// mutually exclusive.
+func parseMetricsAuth(me map[string]interface{}, s *parsedSpec) error {
+	auth, ok := me["authentication"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	if ba, ok := auth["basicAuth"].(map[string]interface{}); ok {
+		username, err := parseRequiredSecretKeySelector(ba, "username")
+		if err != nil {
+			return fmt.Errorf("basicAuth.username: %w", err)
+		}
+		password, err := parseRequiredSecretKeySelector(ba, "password")
+		if err != nil {
+			return fmt.Errorf("basicAuth.password: %w", err)
+		}
+		s.prometheusUsernameSecret = &username
+		s.prometheusPasswordSecret = &password
+	}
+	if b, ok := auth["bearer"].(map[string]interface{}); ok {
+		token, err := parseRequiredSecretKeySelector(b, "token")
+		if err != nil {
+			return fmt.Errorf("bearer.token: %w", err)
+		}
+		s.prometheusTokenSecret = &token
+	}
+	if s.prometheusUsernameSecret != nil && s.prometheusTokenSecret != nil {
+		return fmt.Errorf("basicAuth and bearer are mutually exclusive")
+	}
+	return nil
+}
+
+// parseRequiredSecretKeySelector reads a mandatory {name, key}
+// SecretKeySelector from an unstructured map.
+func parseRequiredSecretKeySelector(m map[string]interface{}, field string) (corev1.SecretKeySelector, error) {
+	sub, ok := m[field].(map[string]interface{})
+	if !ok {
+		return corev1.SecretKeySelector{}, fmt.Errorf("must be a {name, key} SecretKeySelector")
+	}
+	name := getStrField(sub, "name", "")
+	key := getStrField(sub, "key", "")
+	if name == "" || key == "" {
+		return corev1.SecretKeySelector{}, fmt.Errorf("requires both name and key")
+	}
+	return corev1.SecretKeySelector{
+		LocalObjectReference: corev1.LocalObjectReference{Name: name},
+		Key:                  key,
+	}, nil
 }
 
 func getIntField(m map[string]interface{}, key string, defaultVal int) int {

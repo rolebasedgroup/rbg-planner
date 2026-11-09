@@ -116,6 +116,111 @@ spec:
                       metrics:
                         description: Metrics configures metrics collection and exposition.
                         properties:
+                          authentication:
+                            description: |-
+                              Authentication configures credentials for the Prometheus query
+                              endpoint, grouped by mechanism. At most one mechanism may be set.
+                            properties:
+                              basicAuth:
+                                description: |-
+                                  BasicAuth configures HTTP Basic authentication, following the
+                                  prometheus-operator SecretKeySelector convention.
+                                properties:
+                                  password:
+                                    description: Password selects the Secret key holding
+                                      the password.
+                                    properties:
+                                      key:
+                                        description: The key of the secret to select
+                                          from.  Must be a valid secret key.
+                                        type: string
+                                      name:
+                                        default: ""
+                                        description: |-
+                                          Name of the referent.
+                                          This field is effectively required, but due to backwards compatibility is
+                                          allowed to be empty. Instances of this type with an empty value here are
+                                          almost certainly wrong.
+                                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                        type: string
+                                      optional:
+                                        description: Specify whether the Secret or
+                                          its key must be defined
+                                        type: boolean
+                                    required:
+                                    - key
+                                    type: object
+                                    x-kubernetes-map-type: atomic
+                                  username:
+                                    description: Username selects the Secret key holding
+                                      the username.
+                                    properties:
+                                      key:
+                                        description: The key of the secret to select
+                                          from.  Must be a valid secret key.
+                                        type: string
+                                      name:
+                                        default: ""
+                                        description: |-
+                                          Name of the referent.
+                                          This field is effectively required, but due to backwards compatibility is
+                                          allowed to be empty. Instances of this type with an empty value here are
+                                          almost certainly wrong.
+                                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                        type: string
+                                      optional:
+                                        description: Specify whether the Secret or
+                                          its key must be defined
+                                        type: boolean
+                                    required:
+                                    - key
+                                    type: object
+                                    x-kubernetes-map-type: atomic
+                                required:
+                                - password
+                                - username
+                                type: object
+                              bearer:
+                                description: Bearer configures bearer token authentication.
+                                properties:
+                                  token:
+                                    description: |-
+                                      Token selects the Secret key holding the bearer token sent as
+                                      `Authorization: Bearer <token>`.
+                                    properties:
+                                      key:
+                                        description: The key of the secret to select
+                                          from.  Must be a valid secret key.
+                                        type: string
+                                      name:
+                                        default: ""
+                                        description: |-
+                                          Name of the referent.
+                                          This field is effectively required, but due to backwards compatibility is
+                                          allowed to be empty. Instances of this type with an empty value here are
+                                          almost certainly wrong.
+                                          More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                        type: string
+                                      optional:
+                                        description: Specify whether the Secret or
+                                          its key must be defined
+                                        type: boolean
+                                    required:
+                                    - key
+                                    type: object
+                                    x-kubernetes-map-type: atomic
+                                required:
+                                - token
+                                type: object
+                            type: object
+                            x-kubernetes-validations:
+                            - message: basicAuth and bearer are mutually exclusive
+                              rule: '!(has(self.basicAuth) && has(self.bearer))'
+                          endpoint:
+                            description: |-
+                              Endpoint overrides the operator-level Prometheus query endpoint
+                              for this AutoScaler's planner.
+                            type: string
                           metricSource:
                             default: sglang
                             description: MetricSource selects the metric source type.

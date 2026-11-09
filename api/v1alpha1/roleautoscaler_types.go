@@ -229,6 +229,45 @@ type MetricsConfig struct {
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=65535
 	Port *int32 `json:"port,omitempty"`
+
+	// Endpoint overrides the operator-level Prometheus query endpoint
+	// for this AutoScaler's planner.
+	// +optional
+	Endpoint string `json:"endpoint,omitempty"`
+
+	// Authentication configures credentials for the Prometheus query
+	// endpoint, grouped by mechanism. At most one mechanism may be set.
+	// +optional
+	Authentication *AuthenticationConfig `json:"authentication,omitempty"`
+}
+
+// AuthenticationConfig groups Prometheus query credentials by mechanism.
+// +kubebuilder:validation:XValidation:rule="!(has(self.basicAuth) && has(self.bearer))",message="basicAuth and bearer are mutually exclusive"
+type AuthenticationConfig struct {
+	// BasicAuth configures HTTP Basic authentication, following the
+	// prometheus-operator SecretKeySelector convention.
+	// +optional
+	BasicAuth *BasicAuthConfig `json:"basicAuth,omitempty"`
+
+	// Bearer configures bearer token authentication.
+	// +optional
+	Bearer *BearerAuthConfig `json:"bearer,omitempty"`
+}
+
+// BasicAuthConfig holds HTTP Basic auth credentials sourced from Secrets.
+type BasicAuthConfig struct {
+	// Username selects the Secret key holding the username.
+	Username corev1.SecretKeySelector `json:"username"`
+
+	// Password selects the Secret key holding the password.
+	Password corev1.SecretKeySelector `json:"password"`
+}
+
+// BearerAuthConfig holds bearer token authentication credentials.
+type BearerAuthConfig struct {
+	// Token selects the Secret key holding the bearer token sent as
+	// `Authorization: Bearer <token>`.
+	Token corev1.SecretKeySelector `json:"token"`
 }
 
 // AutoScalerPhase represents the current phase of an AutoScaler.

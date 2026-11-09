@@ -110,3 +110,54 @@ class TestQueryMetrics:
         adapter = create_metrics_adapter("sglang", "http://prom:9090")
         result = adapter.get_avg_osl("180s")
         assert result == 128.0
+
+
+class TestAuthAndMetricNames:
+    def test_auth_from_env(self, mock_prom, monkeypatch):
+        monkeypatch.setenv("PROMETHEUS_USERNAME", "user")
+        monkeypatch.setenv("PROMETHEUS_PASSWORD", "pass$token")
+        with patch("rbg_planner.metrics.prometheus.PrometheusConnect") as mock_cls:
+            from rbg_planner.metrics.prometheus import PrometheusAdapter
+
+            PrometheusAdapter("http://prom:9090")
+            assert mock_cls.call_args.kwargs["auth"] == ("user", "pass$token")
+
+    def test_no_auth_when_env_unset(self, mock_prom, monkeypatch):
+        monkeypatch.delenv("PROMETHEUS_USERNAME", raising=False)
+        monkeypatch.delenv("PROMETHEUS_PASSWORD", raising=False)
+        with patch("rbg_planner.metrics.prometheus.PrometheusConnect") as mock_cls:
+            from rbg_planner.metrics.prometheus import PrometheusAdapter
+
+            PrometheusAdapter("http://prom:9090")
+            assert mock_cls.call_args.kwargs["auth"] is None
+
+    def test_sglang_metric_names_match_exported_series(self, mock_prom):
+        # Real series exported by sglang --enable-metrics use a colon prefix
+        # (e.g. sglang:time_to_first_token_seconds), not underscores.
+        adapter = create_metrics_adapter("sglang", "http://prom:9090")
+        assert adapter.metrics.ttft == "sglang:time_to_first_token_seconds"
+        assert adapter.metrics.itl == "sglang:inter_token_latency_seconds"
+        assert adapter.metrics.requests_total == "sglang:num_requests_total"
+        assert adapter.metrics.prompt_tokens == "sglang:prompt_tokens_total"
+        assert adapter.metrics.generation_tokens == "sglang:generation_tokens_total"
+
+    def test_bearer_token_from_env(self, mock_prom, monkeypatch):
+        monkeypatch.setenv("PROMETHEUS_TOKEN", "tok123")
+        monkeypatch.delenv("PROMETHEUS_USERNAME", raising=False)
+        monkeypatch.delenv("PROMETHEUS_PASSWORD", raising=False)
+        with patch("rbg_planner.metrics.prometheus.PrometheusConnect") as mock_cls:
+            from rbg_planner.metrics.prometheus import PrometheusAdapter
+
+            PrometheusAdapter("http://prom:9090")
+            assert mock_cls.call_args.kwargs["headers"] == {"Authorization": "Bearer tok123"}
+            assert mock_cls.call_args.kwargs["auth"] is None
+
+    def test_bearer_token_wins_over_basic(self, mock_prom, monkeypatch):
+        monkeypatch.setenv("PROMETHEUS_TOKEN", "tok123")
+        monkeypatch.setenv("PROMETHEUS_USERNAME", "user")
+        monkeypatch.setenv("PROMETHEUS_PASSWORD", "pass")
+        with patch("rbg_planner.metrics.prometheus.PrometheusConnect") as mock_cls:
+            from rbg_planner.metrics.prometheus import PrometheusAdapter
+
+            PrometheusAdapter("http://prom:9090")
+            assert mock_cls.call_args.kwargs["headers"] == {"Authorization": "Bearer tok123"}
