@@ -1,0 +1,68 @@
+# Example AutoScaler for the qwen-pd RoleBasedGroup.
+# Replace every <placeholder> before applying. The AutoScaler name must match
+# the target RoleBasedGroup name.
+#
+# Two settings are easy to get wrong:
+#   - backend: use `sglang-pd-native` for SGLang PD-disaggregated deployments.
+#     The `sglang-oai` bench backend sends plain OpenAI requests, which
+#     PD-disaggregated engines reject, producing empty profiling data.
+#   - modelName: must match the engine's `--model-path` value EXACTLY
+#     (including the /models prefix), because it becomes the Prometheus
+#     `model_name` label filter. A mismatch makes the planner observe 0 load.
+apiVersion: inference-extension.rolebasedgroup.io/v1alpha1
+kind: AutoScaler
+metadata:
+  name: qwen-pd    # must match the RBG name
+  namespace: default
+spec:
+  scalingInterval: 180
+  backend: sglang-pd-native
+
+  pattern:
+    pdDisaggregated:
+      prefill:
+        roleName: prefill
+        minReplicas: 1
+        maxReplicas: 2
+      decode:
+        roleName: decode
+        minReplicas: 1
+        maxReplicas: 2
+
+  implementation:
+    dynamoPlanner:
+      # Must equal the engines' --model-path value, e.g. "/models/Qwen/Qwen3.5-4B"
+      modelName: "/models/Qwen/Qwen3.5-4B"
+
+      sla:
+        ttft: 500.0
+        itl: 50.0
+
+      loadPredictor: arima
+      predictionWindow: 50
+      noCorrection: false
+      dryRun: false
+
+      imagePullSecrets:
+        - name: regcred
+
+      profiling:
+        inputFormat: "auto"
+        modelSource:
+          pvcName: "model-weights"
+          modelPath: "Qwen/Qwen3.5-4B"
+          mountPath: "/opt/model"
+
+      metrics:
+        engine: sglang
+        port: 9091
+        # Per-CR Prometheus query endpoint. Replace with your Prometheus URL.
+        endpoint: "https://prometheus.example.com"
+        authentication:
+          basicAuth:
+            username:
+              name: prometheus-auth
+              key: username
+            password:
+              name: prometheus-auth
+              key: password

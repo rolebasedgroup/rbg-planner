@@ -1,0 +1,22 @@
+# One-shot load generator pod for exercising the qwen-pd service.
+# Replace <registry> and the pull secret with your values, then:
+#
+#   kubectl apply -f loadgen.yaml
+#   kubectl cp loadgen.py qwen-pd-loadgen:/tmp/loadgen.py
+#   kubectl exec qwen-pd-loadgen -- python3 /tmp/loadgen.py
+apiVersion: v1
+kind: Pod
+metadata:
+  name: qwen-pd-loadgen
+  namespace: default
+spec:
+  imagePullSecrets:
+    - name: regcred
+  containers:
+    - name: loadgen
+      image: <registry>/sglang:v0.5.21
+      command: ["sleep", "3600"]
+      resources:
+        requests:
+          cpu: "1"
+          memory: "2Gi"

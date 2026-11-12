@@ -1,0 +1,58 @@
+# Metrics scrape configuration for the qwen-pd RoleBasedGroup.
+#
+# The headless Services that the RBG controller creates per role expose no
+# ports, so Prometheus Operator cannot discover the engine pods through them.
+# This manifest creates dedicated headless Services with a named `metrics`
+# port (targeting the port named `metrics` in the engine containers) and a
+# ServiceMonitor that selects them.
+apiVersion: v1
+kind: Service
+metadata:
+  name: qwen-pd-prefill-metrics
+  namespace: default
+  labels:
+    app: qwen-pd
+    rbg-metrics: qwen-pd
+spec:
+  clusterIP: None
+  selector:
+    app: qwen-pd
+    role: prefill
+  ports:
+    - name: metrics
+      port: 8000
+      targetPort: metrics
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: qwen-pd-decode-metrics
+  namespace: default
+  labels:
+    app: qwen-pd
+    rbg-metrics: qwen-pd
+spec:
+  clusterIP: None
+  selector:
+    app: qwen-pd
+    role: decode
+  ports:
+    - name: metrics
+      port: 8000
+      targetPort: metrics
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: qwen-pd-engines
+  namespace: default
+  labels:
+    app: qwen-pd
+spec:
+  selector:
+    matchLabels:
+      rbg-metrics: qwen-pd
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 15s

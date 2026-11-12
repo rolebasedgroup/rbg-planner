@@ -1,0 +1,192 @@
+# Example RoleBasedGroup: SGLang PD-disaggregated inference for use with the
+# RBG Planner autoscaler. Replace every <placeholder> before applying.
+#
+# Settings that matter for the autoscaler:
+#   - prefill/decode run with `--enable-metrics`; SGLang serves /metrics on
+#     the main server port (8000), so the port is named `metrics`
+#   - prefill/decode set `scalingAdapter.enable: true` so the RBG controller
+#     creates RoleBasedGroupScalingAdapters, which the planner scales through
+apiVersion: workloads.x-k8s.io/v1alpha2
+kind: RoleBasedGroup
+metadata:
+  name: qwen-pd
+  namespace: default
+  labels:
+    app: qwen-pd
+    deployment-type: pd-disaggregated
+spec:
+  roles:
+    - name: router
+      replicas: 1
+      standalonePattern:
+        template:
+          metadata:
+            labels:
+              app: qwen-pd
+              role: router
+          spec:
+            imagePullSecrets:
+              - name: regcred
+            containers:
+              - name: router
+                image: <registry>/sglang:v0.5.21
+                command:
+                  - python3
+                  - -m
+                  - sglang_router.launch_router
+                  - --pd-disaggregation
+                  - --prefill
+                  - "http://qwen-pd-prefill-0.s-qwen-pd-prefill:8000"
+                  - --decode
+                  - "http://qwen-pd-decode-0.s-qwen-pd-decode:8000"
+                  - --host
+                  - "0.0.0.0"
+                  - --port
+                  - "8000"
+                ports:
+                  - name: http
+                    containerPort: 8000
+                resources:
+                  requests:
+                    cpu: "1"
+                    memory: "2Gi"
+                  limits:
+                    cpu: "2"
+                    memory: "4Gi"
+                readinessProbe:
+                  httpGet:
+                    path: /health
+                    port: 8000
+                  initialDelaySeconds: 30
+                  periodSeconds: 10
+                  timeoutSeconds: 5
+
+    - name: prefill
+      replicas: 1
+      scalingAdapter:
+        enable: true
+      standalonePattern:
+        template:
+          metadata:
+            labels:
+              app: qwen-pd
+              role: prefill
+          spec:
+            imagePullSecrets:
+              - name: regcred
+            volumes:
+              - name: dshm
+                emptyDir:
+                  medium: Memory
+                  sizeLimit: 16Gi
+              - name: models
+                persistentVolumeClaim:
+                  claimName: model-weights
+            containers:
+              - name: prefill
+                image: <registry>/sglang:v0.5.21
+                command:
+                  - python3
+                  - -m
+                  - sglang.launch_server
+                  - --model-path
+                  - /models/Qwen/Qwen3.5-4B
+                  - --host
+                  - "0.0.0.0"
+                  - --port
+                  - "8000"
+                  - --disaggregation-mode
+                  - "prefill"
+                  - --tp-size
+                  - "1"
+                  - --enable-metrics
+                ports:
+                  - name: metrics
+                    containerPort: 8000
+                resources:
+                  requests:
+                    cpu: "4"
+                    memory: "16Gi"
+                    nvidia.com/gpu: "1"
+                  limits:
+                    cpu: "8"
+                    memory: "32Gi"
+                    nvidia.com/gpu: "1"
+                volumeMounts:
+                  - name: dshm
+                    mountPath: /dev/shm
+                  - name: models
+                    mountPath: /models
+                    readOnly: true
+                readinessProbe:
+                  httpGet:
+                    path: /health
+                    port: 8000
+                  initialDelaySeconds: 60
+                  periodSeconds: 10
+                  timeoutSeconds: 5
+
+    - name: decode
+      replicas: 1
+      scalingAdapter:
+        enable: true
+      standalonePattern:
+        template:
+          metadata:
+            labels:
+              app: qwen-pd
+              role: decode
+          spec:
+            imagePullSecrets:
+              - name: regcred
+            volumes:
+              - name: dshm
+                emptyDir:
+                  medium: Memory
+                  sizeLimit: 16Gi
+              - name: models
+                persistentVolumeClaim:
+                  claimName: model-weights
+            containers:
+              - name: decode
+                image: <registry>/sglang:v0.5.21
+                command:
+                  - python3
+                  - -m
+                  - sglang.launch_server
+                  - --model-path
+                  - /models/Qwen/Qwen3.5-4B
+                  - --host
+                  - "0.0.0.0"
+                  - --port
+                  - "8000"
+                  - --disaggregation-mode
+                  - "decode"
+                  - --tp-size
+                  - "1"
+                  - --enable-metrics
+                ports:
+                  - name: metrics
+                    containerPort: 8000
+                resources:
+                  requests:
+                    cpu: "4"
+                    memory: "16Gi"
+                    nvidia.com/gpu: "1"
+                  limits:
+                    cpu: "8"
+                    memory: "32Gi"
+                    nvidia.com/gpu: "1"
+                volumeMounts:
+                  - name: dshm
+                    mountPath: /dev/shm
+                  - name: models
+                    mountPath: /models
+                    readOnly: true
+                readinessProbe:
+                  httpGet:
+                    path: /health
+                    port: 8000
+                  initialDelaySeconds: 60
+                  periodSeconds: 10
+                  timeoutSeconds: 5
