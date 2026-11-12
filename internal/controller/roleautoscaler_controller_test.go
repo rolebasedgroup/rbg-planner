@@ -572,6 +572,22 @@ func findRule(rules []rbacv1.PolicyRule, resource string) *rbacv1.PolicyRule {
 	return nil
 }
 
+// findRuleWithResourceNames is like findRule but additionally matches the
+// rule's ResourceNames exactly (nil means no ResourceNames set).
+func findRuleWithResourceNames(rules []rbacv1.PolicyRule, resource string, resourceNames []string) *rbacv1.PolicyRule {
+	for i := range rules {
+		if !reflect.DeepEqual(rules[i].ResourceNames, resourceNames) {
+			continue
+		}
+		for _, res := range rules[i].Resources {
+			if res == resource {
+				return &rules[i]
+			}
+		}
+	}
+	return nil
+}
+
 func hasVerb(verbs []string, verb string) bool {
 	for _, v := range verbs {
 		if v == verb {
@@ -678,20 +694,28 @@ func TestEnsureRBAC_CreatesSeparatePlannerAndProfilerIdentities(t *testing.T) {
 	if len(profRBGRule.ResourceNames) != 1 || profRBGRule.ResourceNames[0] != "test-rbg" {
 		t.Errorf("profiler rolebasedgroups must be limited to the RBG name, got %v", profRBGRule.ResourceNames)
 	}
-	cmRule := findRule(profilerRole.Rules, "configmaps")
-	if cmRule == nil {
-		t.Fatalf("profiler Role must grant configmaps access, got %+v", profilerRole.Rules)
+	cmGetUpdateRule := findRuleWithResourceNames(profilerRole.Rules, "configmaps", []string{"test-rbg-profiling"})
+	if cmGetUpdateRule == nil {
+		t.Fatalf("profiler Role must grant name-scoped configmaps get/update, got %+v", profilerRole.Rules)
 	}
-	for _, verb := range []string{"get", "create", "update"} {
-		if !hasVerb(cmRule.Verbs, verb) {
-			t.Errorf("profiler configmaps verbs must include %q, got %v", verb, cmRule.Verbs)
+	for _, verb := range []string{"get", "update"} {
+		if !hasVerb(cmGetUpdateRule.Verbs, verb) {
+			t.Errorf("profiler configmaps name-scoped verbs must include %q, got %v", verb, cmGetUpdateRule.Verbs)
 		}
 	}
-	if hasVerb(cmRule.Verbs, "delete") || hasVerb(cmRule.Verbs, "list") {
-		t.Errorf("profiler configmaps verbs must not include delete/list, got %v", cmRule.Verbs)
+	if hasVerb(cmGetUpdateRule.Verbs, "delete") || hasVerb(cmGetUpdateRule.Verbs, "list") || hasVerb(cmGetUpdateRule.Verbs, "create") {
+		t.Errorf("profiler configmaps name-scoped verbs must not include delete/list/create, got %v", cmGetUpdateRule.Verbs)
 	}
-	if len(cmRule.ResourceNames) != 1 || cmRule.ResourceNames[0] != "test-rbg-profiling" {
-		t.Errorf("profiler configmaps must be limited to the profiling ConfigMap, got %v", cmRule.ResourceNames)
+	// Kubernetes RBAC cannot restrict create by resourceNames: the object
+	// name is not in the request path at authorization time, so a rule with
+	// resourceNames never matches a create. create must be a separate,
+	// namespace-scoped rule.
+	cmCreateRule := findRuleWithResourceNames(profilerRole.Rules, "configmaps", nil)
+	if cmCreateRule == nil {
+		t.Fatalf("profiler Role must grant a separate namespace-scoped configmaps create rule, got %+v", profilerRole.Rules)
+	}
+	if !hasVerb(cmCreateRule.Verbs, "create") || len(cmCreateRule.Verbs) != 1 {
+		t.Errorf("profiler namespace-scoped configmaps verbs must be exactly create, got %v", cmCreateRule.Verbs)
 	}
 	if findRule(profilerRole.Rules, "rolebasedgroupscalingadapters/scale") != nil {
 		t.Errorf("profiler Role must not grant scale access, got %+v", profilerRole.Rules)

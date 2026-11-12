@@ -38,7 +38,7 @@ The core planning algorithm, SLA profiling methodology, and performance interpol
 
 1. User creates an `AutoScaler` CR with the same name as the target RBG
 2. Operator validates the RBG exists and reads GPU-per-engine from the RBG's resource requests
-3. Operator creates per-CR, namespaced RBAC for the two workloads it manages: a planner ServiceAccount/Role/RoleBinding (RBG get/patch plus scale patch on the two role adapters) and a profiler ServiceAccount/Role/RoleBinding (RBG get plus get/create/update on the profiling ConfigMap). All objects are namespaced, scoped with `resourceNames` to the exact objects involved, and garbage-collected with the AutoScaler via ownerRefs.
+3. Operator creates per-CR, namespaced RBAC for the two workloads it manages: a planner ServiceAccount/Role/RoleBinding (RBG get/patch plus scale patch on the two role adapters) and a profiler ServiceAccount/Role/RoleBinding (RBG get plus configmap get/update on the profiling ConfigMap, and namespace-scoped configmap create — Kubernetes RBAC cannot restrict `create` by `resourceNames`). All objects are namespaced, scoped with `resourceNames` to the exact objects involved where possible, and garbage-collected with the AutoScaler via ownerRefs.
 4. Operator runs a profiling Job to generate performance data (or uses existing ConfigMap)
 5. Operator deploys the planner engine as a Deployment with profiling data mounted
 6. Planner engine runs in a loop: observe metrics -> predict load -> compute replicas -> scale via RBGSA

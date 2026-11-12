@@ -408,8 +408,11 @@ func buildPlannerRules(name, prefillRole, decodeRole string) []rbacv1.PolicyRule
 }
 
 // buildProfilerRules returns the narrow rules granted to the per-CR profiler
-// Role: RBG get on its own RBG plus configmap get/create/update on the
-// profiling output ConfigMap.
+// Role: RBG get on its own RBG plus configmap access for the profiling output
+// ConfigMap. get/update are scoped to the exact ConfigMap name; create cannot
+// be name-scoped because Kubernetes RBAC never matches resourceNames on a
+// create request (the object name is not in the request path at authorization
+// time), so it gets a separate namespace-scoped rule.
 func buildProfilerRules(name string) []rbacv1.PolicyRule {
 	return []rbacv1.PolicyRule{
 		{
@@ -421,8 +424,13 @@ func buildProfilerRules(name string) []rbacv1.PolicyRule {
 		{
 			APIGroups:     []string{""},
 			Resources:     []string{"configmaps"},
-			Verbs:         []string{"get", "create", "update"},
+			Verbs:         []string{"get", "update"},
 			ResourceNames: []string{name + "-profiling"},
+		},
+		{
+			APIGroups: []string{""},
+			Resources: []string{"configmaps"},
+			Verbs:     []string{"create"},
 		},
 	}
 }
