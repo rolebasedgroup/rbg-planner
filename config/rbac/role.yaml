@@ -8,9 +8,12 @@ rules:
   - ""
   resources:
   - configmaps
+  - serviceaccounts
   verbs:
+  - create
   - get
   - list
+  - update
   - watch
 - apiGroups:
   - ""
@@ -19,16 +22,6 @@ rules:
   verbs:
   - create
   - patch
-- apiGroups:
-  - ""
-  resources:
-  - serviceaccounts
-  verbs:
-  - create
-  - get
-  - list
-  - update
-  - watch
 - apiGroups:
   - apps
   resources:
@@ -92,4 +85,11 @@ rules:
   verbs:
   - get
   - list
+  - patch
   - watch
+- apiGroups:
+  - workloads.x-k8s.io
+  resources:
+  - rolebasedgroupscalingadapters/scale
+  verbs:
+  - patch

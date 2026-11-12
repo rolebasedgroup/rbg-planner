@@ -77,11 +77,16 @@ type AutoScalerReconciler struct {
 // +kubebuilder:rbac:groups=inference-extension.rolebasedgroup.io,resources=autoscalers,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=inference-extension.rolebasedgroup.io,resources=autoscalers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=inference-extension.rolebasedgroup.io,resources=autoscalers/finalizers,verbs=update
-// +kubebuilder:rbac:groups=workloads.x-k8s.io,resources=rolebasedgroups,verbs=get;list;watch
+// NOTE: the operator never calls these itself, but it delegates them to the
+// per-CR planner/profiler Roles it creates. The API server's RBAC escalation
+// prevention rejects creating a Role granting verbs the creator does not
+// hold, so these must stay (see TestOperatorClusterRoleCoversDelegatedRules):
+// +kubebuilder:rbac:groups=workloads.x-k8s.io,resources=rolebasedgroups,verbs=get;list;watch;patch
+// +kubebuilder:rbac:groups=workloads.x-k8s.io,resources=rolebasedgroupscalingadapters/scale,verbs=patch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update
-// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;delete
 
@@ -382,13 +387,11 @@ func (r *AutoScalerReconciler) parseRASSpec(ras *unstructured.Unstructured) (*pa
 // Every object is namespaced, carries an ownerRef to the AutoScaler (so it is
 // garbage-collected with the CR), and uses resourceNames to narrow grants to
 // the exact objects involved.
-func (r *AutoScalerReconciler) ensureRBAC(ctx context.Context, ras *unstructured.Unstructured, spec *parsedSpec) error {
-	name := ras.GetName()
-	namespace := ras.GetNamespace()
-	plannerSA := name + "-planner"
-	profilerSA := name + "-profiler"
-
-	plannerRules := []rbacv1.PolicyRule{
+// buildPlannerRules returns the narrow rules granted to the per-CR planner
+// Role: RBG get/patch on its own RBG plus scale patch on the two role
+// adapters.
+func buildPlannerRules(name, prefillRole, decodeRole string) []rbacv1.PolicyRule {
+	return []rbacv1.PolicyRule{
 		{
 			APIGroups:     []string{rbgGroup},
 			Resources:     []string{rbgPlural},
@@ -399,11 +402,16 @@ func (r *AutoScalerReconciler) ensureRBAC(ctx context.Context, ras *unstructured
 			APIGroups:     []string{rbgGroup},
 			Resources:     []string{"rolebasedgroupscalingadapters/scale"},
 			Verbs:         []string{"patch"},
-			ResourceNames: []string{name + "-" + spec.prefillRoleName, name + "-" + spec.decodeRoleName},
+			ResourceNames: []string{name + "-" + prefillRole, name + "-" + decodeRole},
 		},
 	}
+}
 
-	profilerRules := []rbacv1.PolicyRule{
+// buildProfilerRules returns the narrow rules granted to the per-CR profiler
+// Role: RBG get on its own RBG plus configmap get/create/update on the
+// profiling output ConfigMap.
+func buildProfilerRules(name string) []rbacv1.PolicyRule {
+	return []rbacv1.PolicyRule{
 		{
 			APIGroups:     []string{rbgGroup},
 			Resources:     []string{rbgPlural},
@@ -417,6 +425,16 @@ func (r *AutoScalerReconciler) ensureRBAC(ctx context.Context, ras *unstructured
 			ResourceNames: []string{name + "-profiling"},
 		},
 	}
+}
+
+func (r *AutoScalerReconciler) ensureRBAC(ctx context.Context, ras *unstructured.Unstructured, spec *parsedSpec) error {
+	name := ras.GetName()
+	namespace := ras.GetNamespace()
+	plannerSA := name + "-planner"
+	profilerSA := name + "-profiler"
+
+	plannerRules := buildPlannerRules(name, spec.prefillRoleName, spec.decodeRoleName)
+	profilerRules := buildProfilerRules(name)
 
 	for _, saName := range []string{plannerSA, profilerSA} {
 		sa := &corev1.ServiceAccount{

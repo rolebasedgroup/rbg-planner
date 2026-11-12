@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"reflect"
 	"strings"
@@ -34,6 +35,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/yaml"
 )
 
 func TestBuildProfilingVolumes_WithPVCAndRelativeModelPath(t *testing.T) {
@@ -819,6 +821,66 @@ func TestCreateProfilingJob_UsesProfilerServiceAccount(t *testing.T) {
 	}
 	if got := created.Spec.Template.Spec.ServiceAccountName; got != "test-rbg-profiler" {
 		t.Errorf("profiling job must use the dedicated profiler SA, got %q", got)
+	}
+}
+
+// --- operator ClusterRole escalation-coverage test ---
+//
+// The Kubernetes API server rejects creating a Role whose rules grant
+// permissions the creator does not itself hold (RBAC escalation prevention).
+// The operator's ClusterRole (generated from kubebuilder markers into
+// config/rbac/role.yaml) must therefore hold every verb+resource it delegates
+// via buildPlannerRules/buildProfilerRules.
+
+func TestOperatorClusterRoleCoversDelegatedRules(t *testing.T) {
+	data, err := os.ReadFile("../../config/rbac/role.yaml")
+	if err != nil {
+		t.Fatalf("failed to read generated operator role: %v", err)
+	}
+	operatorRole := &rbacv1.ClusterRole{}
+	if err := yaml.UnmarshalStrict(data, operatorRole); err != nil {
+		t.Fatalf("failed to parse config/rbac/role.yaml: %v", err)
+	}
+
+	covers := func(rule rbacv1.PolicyRule) error {
+		for _, op := range operatorRole.Rules {
+			if op.APIGroups[0] != rule.APIGroups[0] {
+				continue
+			}
+			resourceMatch := false
+			for _, res := range op.Resources {
+				if res == rule.Resources[0] {
+					resourceMatch = true
+					break
+				}
+			}
+			if !resourceMatch {
+				continue
+			}
+			missing := []string{}
+			for _, verb := range rule.Verbs {
+				if !hasVerb(op.Verbs, verb) {
+					missing = append(missing, verb)
+				}
+			}
+			if len(missing) == 0 {
+				return nil
+			}
+			return fmt.Errorf("operator rule for %s.%s lacks verbs %v (has %v); the API server will reject Role creation via RBAC escalation prevention",
+				rule.APIGroups[0], rule.Resources[0], missing, op.Verbs)
+		}
+		return fmt.Errorf("operator ClusterRole has no rule for %s.%s", rule.APIGroups[0], rule.Resources[0])
+	}
+
+	for _, rule := range buildPlannerRules("rbg", "prefill", "decode") {
+		if err := covers(rule); err != nil {
+			t.Error(err)
+		}
+	}
+	for _, rule := range buildProfilerRules("rbg") {
+		if err := covers(rule); err != nil {
+			t.Error(err)
+		}
 	}
 }
 
