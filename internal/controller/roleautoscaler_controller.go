@@ -58,9 +58,6 @@ const (
 	// Default Prometheus endpoint (in-cluster).
 	defaultPrometheusEndpoint = "http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090"
 
-	// ClusterRole name shared by all planner instances.
-	plannerClusterRoleName = "rbg-planner-role"
-
 	// RBG CRD coordinates for unstructured access.
 	rbgGroup   = "workloads.x-k8s.io"
 	rbgVersion = "v1alpha2"
@@ -77,16 +74,16 @@ type AutoScalerReconciler struct {
 	PrometheusEndpoint string
 }
 
-// +kubebuilder:rbac:groups=inference-extension.rolebasedgroup.io,resources=autoscalers,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=inference-extension.rolebasedgroup.io,resources=autoscalers,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=inference-extension.rolebasedgroup.io,resources=autoscalers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=inference-extension.rolebasedgroup.io,resources=autoscalers/finalizers,verbs=update
-// +kubebuilder:rbac:groups=workloads.x-k8s.io,resources=rolebasedgroups,verbs=get;list;watch;patch
-// +kubebuilder:rbac:groups=workloads.x-k8s.io,resources=rolebasedgroupscalingadapters/scale,verbs=patch
-// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=workloads.x-k8s.io,resources=rolebasedgroups,verbs=get;list;watch
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
-// +kubebuilder:rbac:groups="",resources=serviceaccounts;configmaps,verbs=get;list;watch;create;update;delete
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles;clusterrolebindings,verbs=get;list;watch;create;update;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;delete
 
 func (r *AutoScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -162,7 +159,7 @@ func (r *AutoScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	prefillGPUs, decodeGPUs := getGPUsFromRBG(rbg, spec.prefillRoleName, spec.decodeRoleName)
 
 	// 5. Ensure RBAC.
-	if err := r.ensureRBAC(ctx, ras); err != nil {
+	if err := r.ensureRBAC(ctx, ras, spec); err != nil {
 		logger.Error(err, "failed to ensure RBAC")
 		return ctrl.Result{}, err
 	}
@@ -374,82 +371,122 @@ func (r *AutoScalerReconciler) parseRASSpec(ras *unstructured.Unstructured) (*pa
 
 // --- RBAC ---
 
-func (r *AutoScalerReconciler) ensureRBAC(ctx context.Context, ras *unstructured.Unstructured) error {
+// ensureRBAC creates per-CR, namespaced RBAC for the two workloads the
+// operator manages:
+//
+//   - planner SA: RBG get/patch on its own RBG plus scale patch on the two
+//     role adapters.
+//   - profiler SA: RBG get on its own RBG plus configmap get/create/update
+//     on the profiling output ConfigMap.
+//
+// Every object is namespaced, carries an ownerRef to the AutoScaler (so it is
+// garbage-collected with the CR), and uses resourceNames to narrow grants to
+// the exact objects involved.
+func (r *AutoScalerReconciler) ensureRBAC(ctx context.Context, ras *unstructured.Unstructured, spec *parsedSpec) error {
 	name := ras.GetName()
 	namespace := ras.GetNamespace()
-	saName := name + "-planner"
-	crbName := name + "-planner-binding"
+	plannerSA := name + "-planner"
+	profilerSA := name + "-profiler"
 
-	// ServiceAccount
-	sa := &corev1.ServiceAccount{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      saName,
-			Namespace: namespace,
-			OwnerReferences: []metav1.OwnerReference{
-				ownerRef(ras),
-			},
+	plannerRules := []rbacv1.PolicyRule{
+		{
+			APIGroups:     []string{rbgGroup},
+			Resources:     []string{rbgPlural},
+			Verbs:         []string{"get", "patch"},
+			ResourceNames: []string{name},
 		},
-	}
-	if err := r.createOrUpdate(ctx, sa, func() {}); err != nil {
-		return fmt.Errorf("ensure ServiceAccount: %w", err)
-	}
-
-	// ClusterRole (shared, no owner ref)
-	cr := &rbacv1.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: plannerClusterRoleName,
+		{
+			APIGroups:     []string{rbgGroup},
+			Resources:     []string{"rolebasedgroupscalingadapters/scale"},
+			Verbs:         []string{"patch"},
+			ResourceNames: []string{name + "-" + spec.prefillRoleName, name + "-" + spec.decodeRoleName},
 		},
-		Rules: []rbacv1.PolicyRule{
-			{
-				APIGroups: []string{"workloads.x-k8s.io"},
-				Resources: []string{"rolebasedgroups"},
-				Verbs:     []string{"get", "list", "patch"},
-			},
-			{
-				APIGroups: []string{"workloads.x-k8s.io"},
-				Resources: []string{"rolebasedgroupscalingadapters/scale"},
-				Verbs:     []string{"patch"},
-			},
-			{
-				APIGroups: []string{""},
-				Resources: []string{"configmaps"},
-				Verbs:     []string{"get", "list", "create", "update"},
-			},
-		},
-	}
-	if err := r.createIfNotExists(ctx, cr); err != nil {
-		return fmt.Errorf("ensure ClusterRole: %w", err)
 	}
 
-	// ClusterRoleBinding (per CR, cleaned via finalizer)
-	crb := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: crbName,
-			Labels: map[string]string{
-				"app.kubernetes.io/managed-by":                       "rbg-planner-operator",
-				"inference-extension.rolebasedgroup.io/as-name":      name,
-				"inference-extension.rolebasedgroup.io/as-namespace": namespace,
-			},
+	profilerRules := []rbacv1.PolicyRule{
+		{
+			APIGroups:     []string{rbgGroup},
+			Resources:     []string{rbgPlural},
+			Verbs:         []string{"get"},
+			ResourceNames: []string{name},
 		},
-		RoleRef: rbacv1.RoleRef{
-			APIGroup: "rbac.authorization.k8s.io",
-			Kind:     "ClusterRole",
-			Name:     plannerClusterRoleName,
-		},
-		Subjects: []rbacv1.Subject{
-			{
-				Kind:      "ServiceAccount",
-				Name:      saName,
-				Namespace: namespace,
-			},
+		{
+			APIGroups:     []string{""},
+			Resources:     []string{"configmaps"},
+			Verbs:         []string{"get", "create", "update"},
+			ResourceNames: []string{name + "-profiling"},
 		},
 	}
-	if err := r.createOrUpdate(ctx, crb, func() {
-		crb.Subjects = []rbacv1.Subject{
-			{Kind: "ServiceAccount", Name: saName, Namespace: namespace},
+
+	for _, saName := range []string{plannerSA, profilerSA} {
+		sa := &corev1.ServiceAccount{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:            saName,
+				Namespace:       namespace,
+				OwnerReferences: []metav1.OwnerReference{ownerRef(ras)},
+			},
 		}
-	}); err != nil {
-		return fmt.Errorf("ensure ClusterRoleBinding: %w", err)
+		if err := r.createOrUpdate(ctx, sa, func() {}); err != nil {
+			return fmt.Errorf("ensure ServiceAccount %s: %w", saName, err)
+		}
+	}
+
+	newRole := func(saName string, rules []rbacv1.PolicyRule) *rbacv1.Role {
+		return &rbacv1.Role{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:            saName,
+				Namespace:       namespace,
+				OwnerReferences: []metav1.OwnerReference{ownerRef(ras)},
+			},
+			Rules: rules,
+		}
+	}
+
+	// Always rewrite the rules so spec role renames propagate.
+	for _, role := range []*rbacv1.Role{
+		newRole(plannerSA, plannerRules),
+		newRole(profilerSA, profilerRules),
+	} {
+		want := role.Rules
+		if err := r.createOrUpdate(ctx, role, func() {
+			role.Rules = want
+		}); err != nil {
+			return fmt.Errorf("ensure Role %s: %w", role.GetName(), err)
+		}
+	}
+
+	for _, saName := range []string{plannerSA, profilerSA} {
+		rb := &rbacv1.RoleBinding{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:            saName,
+				Namespace:       namespace,
+				OwnerReferences: []metav1.OwnerReference{ownerRef(ras)},
+			},
+			RoleRef: rbacv1.RoleRef{
+				APIGroup: "rbac.authorization.k8s.io",
+				Kind:     "Role",
+				Name:     saName,
+			},
+			Subjects: []rbacv1.Subject{
+				{
+					Kind:      "ServiceAccount",
+					Name:      saName,
+					Namespace: namespace,
+				},
+			},
+		}
+		if err := r.createOrUpdate(ctx, rb, func() {
+			rb.RoleRef = rbacv1.RoleRef{
+				APIGroup: "rbac.authorization.k8s.io",
+				Kind:     "Role",
+				Name:     saName,
+			}
+			rb.Subjects = []rbacv1.Subject{
+				{Kind: "ServiceAccount", Name: saName, Namespace: namespace},
+			}
+		}); err != nil {
+			return fmt.Errorf("ensure RoleBinding %s: %w", saName, err)
+		}
 	}
 
 	return nil
@@ -459,35 +496,26 @@ func (r *AutoScalerReconciler) cleanupClusterResources(ctx context.Context, ras 
 	namespace := ras.GetNamespace()
 	name := ras.GetName()
 
-	// 1. Delete profiling Job with foreground cascade so its pods are
+	// Delete profiling Job with foreground cascade so its pods are
 	// removed before the Job object disappears from etcd.
+	// Namespaced RBAC objects (SA/Role/RoleBinding) carry ownerRefs and are
+	// reclaimed by garbage collection together with the AutoScaler.
 	jobName := name + "-profiling"
 	job := &batchv1.Job{}
 	if err := r.Get(ctx, types.NamespacedName{Name: jobName, Namespace: namespace}, job); err != nil {
 		if !apierrors.IsNotFound(err) {
 			return fmt.Errorf("get profiling job %s: %w", jobName, err)
 		}
-		// Job already gone — fall through to CRB cleanup.
-	} else {
-		if job.GetDeletionTimestamp() == nil {
-			if delErr := r.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationForeground)); delErr != nil && !apierrors.IsNotFound(delErr) {
-				return fmt.Errorf("delete profiling job %s: %w", jobName, delErr)
-			}
-		}
-		// Job still exists (being deleted) — requeue until it is gone.
-		return fmt.Errorf("waiting for profiling job %s deletion", jobName)
+		// Job already gone — nothing else to clean up.
+		return nil
 	}
-
-	// 2. Delete ClusterRoleBinding.
-	crbName := name + "-planner-binding"
-	crb := &rbacv1.ClusterRoleBinding{}
-	if err := r.Get(ctx, types.NamespacedName{Name: crbName}, crb); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
+	if job.GetDeletionTimestamp() == nil {
+		if delErr := r.Delete(ctx, job, client.PropagationPolicy(metav1.DeletePropagationForeground)); delErr != nil && !apierrors.IsNotFound(delErr) {
+			return fmt.Errorf("delete profiling job %s: %w", jobName, delErr)
 		}
-		return err
 	}
-	return r.Delete(ctx, crb)
+	// Job still exists (being deleted) — requeue until it is gone.
+	return fmt.Errorf("waiting for profiling job %s deletion", jobName)
 }
 
 // --- Profiling ---
@@ -584,7 +612,7 @@ func buildProfilingVolumes(pvcName, modelPath, mountPath string) (volumes []core
 func (r *AutoScalerReconciler) createProfilingJob(ctx context.Context, ras *unstructured.Unstructured, spec *parsedSpec, jobName, cmName string) error {
 	namespace := ras.GetNamespace()
 	rbgName := ras.GetName()
-	saName := rbgName + "-planner"
+	saName := rbgName + "-profiler"
 
 	volumes, volumeMounts, tokenizerPath := buildProfilingVolumes(
 		spec.modelCachePVCName,
@@ -1010,14 +1038,6 @@ func ownerRef(ras *unstructured.Unstructured) metav1.OwnerReference {
 		BlockOwnerDeletion: &blockOwnerDeletion,
 		Controller:         &isController,
 	}
-}
-
-func (r *AutoScalerReconciler) createIfNotExists(ctx context.Context, obj client.Object) error {
-	err := r.Create(ctx, obj)
-	if apierrors.IsAlreadyExists(err) {
-		return nil
-	}
-	return err
 }
 
 func (r *AutoScalerReconciler) createOrUpdate(ctx context.Context, obj client.Object, mutateFn func()) error {

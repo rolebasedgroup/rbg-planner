@@ -8,13 +8,9 @@ rules:
   - ""
   resources:
   - configmaps
-  - serviceaccounts
   verbs:
-  - create
-  - delete
   - get
   - list
-  - update
   - watch
 - apiGroups:
   - ""
@@ -24,15 +20,23 @@ rules:
   - create
   - patch
 - apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  verbs:
+  - create
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
   - apps
   resources:
   - deployments
   verbs:
   - create
-  - delete
   - get
   - list
-  - patch
   - update
   - watch
 - apiGroups:
@@ -50,8 +54,6 @@ rules:
   resources:
   - autoscalers
   verbs:
-  - create
-  - delete
   - get
   - list
   - patch
@@ -74,8 +76,8 @@ rules:
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:
-  - clusterrolebindings
-  - clusterroles
+  - rolebindings
+  - roles
   verbs:
   - create
   - delete
@@ -90,11 +92,4 @@ rules:
   verbs:
   - get
   - list
-  - patch
   - watch
-- apiGroups:
-  - workloads.x-k8s.io
-  resources:
-  - rolebasedgroupscalingadapters/scale
-  verbs:
-  - patch

@@ -454,6 +454,9 @@ func TestCleanupClusterResources_DeletesProfilingJobAndWaits(t *testing.T) {
 	if err := rbacv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("failed to add rbac scheme: %v", err)
 	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add core scheme: %v", err)
+	}
 
 	ras := &unstructured.Unstructured{}
 	ras.SetName("test-rbg")
@@ -469,15 +472,18 @@ func TestCleanupClusterResources_DeletesProfilingJobAndWaits(t *testing.T) {
 			Finalizers: []string{"foregroundDeletion"},
 		},
 	}
-	crb := &rbacv1.ClusterRoleBinding{
+	// Namespaced RBAC is garbage-collected via ownerRefs; cleanup must not
+	// delete it directly.
+	roleBinding := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "test-rbg-planner-binding",
+			Name:      "test-rbg-planner",
+			Namespace: "test-ns",
 		},
 	}
 
 	cl := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(job, crb).
+		WithObjects(job, roleBinding).
 		Build()
 
 	r := &AutoScalerReconciler{Client: cl, Scheme: scheme}
@@ -500,15 +506,15 @@ func TestCleanupClusterResources_DeletesProfilingJobAndWaits(t *testing.T) {
 		t.Error("expected deletionTimestamp on job")
 	}
 
-	// CRB should still exist — cleanup must not proceed past the Job.
+	// RoleBinding is GC-owned — cleanup must not proceed past the Job.
 	if err := cl.Get(context.Background(),
-		types.NamespacedName{Name: "test-rbg-planner-binding"},
-		&rbacv1.ClusterRoleBinding{}); err != nil {
-		t.Errorf("expected CRB to still exist, got error: %v", err)
+		types.NamespacedName{Name: "test-rbg-planner", Namespace: "test-ns"},
+		&rbacv1.RoleBinding{}); err != nil {
+		t.Errorf("expected RoleBinding to still exist, got error: %v", err)
 	}
 }
 
-func TestCleanupClusterResources_JobGoneDeletesCRB(t *testing.T) {
+func TestCleanupClusterResources_JobGoneLeavesNamespacedRBACToGC(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := batchv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("failed to add batch scheme: %v", err)
@@ -516,20 +522,24 @@ func TestCleanupClusterResources_JobGoneDeletesCRB(t *testing.T) {
 	if err := rbacv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("failed to add rbac scheme: %v", err)
 	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add core scheme: %v", err)
+	}
 
 	ras := &unstructured.Unstructured{}
 	ras.SetName("test-rbg")
 	ras.SetNamespace("test-ns")
 
-	crb := &rbacv1.ClusterRoleBinding{
+	roleBinding := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "test-rbg-planner-binding",
+			Name:      "test-rbg-planner",
+			Namespace: "test-ns",
 		},
 	}
 
 	cl := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(crb).
+		WithObjects(roleBinding).
 		Build()
 
 	r := &AutoScalerReconciler{Client: cl, Scheme: scheme}
@@ -538,12 +548,277 @@ func TestCleanupClusterResources_JobGoneDeletesCRB(t *testing.T) {
 		t.Fatalf("expected nil error, got: %v", err)
 	}
 
-	// CRB should be deleted.
-	err := cl.Get(context.Background(),
-		types.NamespacedName{Name: "test-rbg-planner-binding"},
-		&rbacv1.ClusterRoleBinding{})
-	if !apierrors.IsNotFound(err) {
-		t.Errorf("expected CRB to be deleted, got error: %v", err)
+	// RoleBinding must survive — namespaced RBAC is reclaimed by GC via
+	// ownerRefs, not by the operator.
+	if err := cl.Get(context.Background(),
+		types.NamespacedName{Name: "test-rbg-planner", Namespace: "test-ns"},
+		&rbacv1.RoleBinding{}); err != nil {
+		t.Errorf("expected RoleBinding to still exist, got error: %v", err)
+	}
+}
+
+// --- ensureRBAC tests ---
+
+func findRule(rules []rbacv1.PolicyRule, resource string) *rbacv1.PolicyRule {
+	for i := range rules {
+		for _, res := range rules[i].Resources {
+			if res == resource {
+				return &rules[i]
+			}
+		}
+	}
+	return nil
+}
+
+func hasVerb(verbs []string, verb string) bool {
+	for _, v := range verbs {
+		if v == verb {
+			return true
+		}
+	}
+	return false
+}
+
+func newRBACTestScheme(t *testing.T) *runtime.Scheme {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	for _, add := range []func(*runtime.Scheme) error{corev1.AddToScheme, rbacv1.AddToScheme} {
+		if err := add(scheme); err != nil {
+			t.Fatalf("failed to build scheme: %v", err)
+		}
+	}
+	return scheme
+}
+
+func newTestRAS() *unstructured.Unstructured {
+	ras := &unstructured.Unstructured{}
+	ras.SetAPIVersion("inference-extension.rolebasedgroup.io/v1alpha1")
+	ras.SetKind("AutoScaler")
+	ras.SetName("test-rbg")
+	ras.SetNamespace("test-ns")
+	ras.SetUID("ras-uid")
+	return ras
+}
+
+func TestEnsureRBAC_CreatesSeparatePlannerAndProfilerIdentities(t *testing.T) {
+	scheme := newRBACTestScheme(t)
+	ras := newTestRAS()
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &AutoScalerReconciler{Client: cl, Scheme: scheme}
+
+	spec := &parsedSpec{prefillRoleName: "p-engine", decodeRoleName: "d-engine"}
+	if err := r.ensureRBAC(context.Background(), ras, spec); err != nil {
+		t.Fatalf("ensureRBAC failed: %v", err)
+	}
+
+	// Two distinct ServiceAccounts, both owner-referenced to the CR.
+	for _, saName := range []string{"test-rbg-planner", "test-rbg-profiler"} {
+		sa := &corev1.ServiceAccount{}
+		if err := cl.Get(context.Background(),
+			types.NamespacedName{Name: saName, Namespace: "test-ns"}, sa); err != nil {
+			t.Fatalf("expected ServiceAccount %s to exist, got: %v", saName, err)
+		}
+		if len(sa.OwnerReferences) != 1 || sa.OwnerReferences[0].UID != "ras-uid" {
+			t.Errorf("ServiceAccount %s must be owner-referenced to the AutoScaler, got %+v", saName, sa.OwnerReferences)
+		}
+	}
+
+	// Planner Role: RBG get/patch on the exact RBG name, scale patch on the
+	// two role-specific adapters, and nothing else.
+	plannerRole := &rbacv1.Role{}
+	if err := cl.Get(context.Background(),
+		types.NamespacedName{Name: "test-rbg-planner", Namespace: "test-ns"}, plannerRole); err != nil {
+		t.Fatalf("expected planner Role to exist, got: %v", err)
+	}
+	rbgRule := findRule(plannerRole.Rules, "rolebasedgroups")
+	if rbgRule == nil {
+		t.Fatalf("planner Role must grant rolebasedgroups access, got %+v", plannerRole.Rules)
+	}
+	if !hasVerb(rbgRule.Verbs, "get") || !hasVerb(rbgRule.Verbs, "patch") || hasVerb(rbgRule.Verbs, "list") {
+		t.Errorf("planner rolebasedgroups verbs must be exactly get;patch, got %v", rbgRule.Verbs)
+	}
+	if len(rbgRule.ResourceNames) != 1 || rbgRule.ResourceNames[0] != "test-rbg" {
+		t.Errorf("planner rolebasedgroups must be limited to the RBG name, got %v", rbgRule.ResourceNames)
+	}
+	scaleRule := findRule(plannerRole.Rules, "rolebasedgroupscalingadapters/scale")
+	if scaleRule == nil {
+		t.Fatalf("planner Role must grant scale access, got %+v", plannerRole.Rules)
+	}
+	if !hasVerb(scaleRule.Verbs, "patch") || len(scaleRule.Verbs) != 1 {
+		t.Errorf("planner scale verbs must be exactly patch, got %v", scaleRule.Verbs)
+	}
+	wantScaleNames := []string{"test-rbg-p-engine", "test-rbg-d-engine"}
+	if !reflect.DeepEqual(scaleRule.ResourceNames, wantScaleNames) {
+		t.Errorf("planner scale resourceNames = %v, want %v", scaleRule.ResourceNames, wantScaleNames)
+	}
+	if findRule(plannerRole.Rules, "configmaps") != nil {
+		t.Errorf("planner Role must not grant configmaps access, got %+v", plannerRole.Rules)
+	}
+	if len(plannerRole.OwnerReferences) != 1 || plannerRole.OwnerReferences[0].UID != "ras-uid" {
+		t.Errorf("planner Role must be owner-referenced to the AutoScaler, got %+v", plannerRole.OwnerReferences)
+	}
+
+	// Profiler Role: RBG get only, configmaps get/create/update on the
+	// profiling ConfigMap, and nothing else.
+	profilerRole := &rbacv1.Role{}
+	if err := cl.Get(context.Background(),
+		types.NamespacedName{Name: "test-rbg-profiler", Namespace: "test-ns"}, profilerRole); err != nil {
+		t.Fatalf("expected profiler Role to exist, got: %v", err)
+	}
+	profRBGRule := findRule(profilerRole.Rules, "rolebasedgroups")
+	if profRBGRule == nil {
+		t.Fatalf("profiler Role must grant rolebasedgroups get, got %+v", profilerRole.Rules)
+	}
+	if len(profRBGRule.Verbs) != 1 || profRBGRule.Verbs[0] != "get" {
+		t.Errorf("profiler rolebasedgroups verbs must be exactly get, got %v", profRBGRule.Verbs)
+	}
+	if len(profRBGRule.ResourceNames) != 1 || profRBGRule.ResourceNames[0] != "test-rbg" {
+		t.Errorf("profiler rolebasedgroups must be limited to the RBG name, got %v", profRBGRule.ResourceNames)
+	}
+	cmRule := findRule(profilerRole.Rules, "configmaps")
+	if cmRule == nil {
+		t.Fatalf("profiler Role must grant configmaps access, got %+v", profilerRole.Rules)
+	}
+	for _, verb := range []string{"get", "create", "update"} {
+		if !hasVerb(cmRule.Verbs, verb) {
+			t.Errorf("profiler configmaps verbs must include %q, got %v", verb, cmRule.Verbs)
+		}
+	}
+	if hasVerb(cmRule.Verbs, "delete") || hasVerb(cmRule.Verbs, "list") {
+		t.Errorf("profiler configmaps verbs must not include delete/list, got %v", cmRule.Verbs)
+	}
+	if len(cmRule.ResourceNames) != 1 || cmRule.ResourceNames[0] != "test-rbg-profiling" {
+		t.Errorf("profiler configmaps must be limited to the profiling ConfigMap, got %v", cmRule.ResourceNames)
+	}
+	if findRule(profilerRole.Rules, "rolebasedgroupscalingadapters/scale") != nil {
+		t.Errorf("profiler Role must not grant scale access, got %+v", profilerRole.Rules)
+	}
+	if len(profilerRole.OwnerReferences) != 1 || profilerRole.OwnerReferences[0].UID != "ras-uid" {
+		t.Errorf("profiler Role must be owner-referenced to the AutoScaler, got %+v", profilerRole.OwnerReferences)
+	}
+
+	// RoleBindings wire each SA to its own namespaced Role.
+	for _, rbName := range []string{"test-rbg-planner", "test-rbg-profiler"} {
+		rb := &rbacv1.RoleBinding{}
+		if err := cl.Get(context.Background(),
+			types.NamespacedName{Name: rbName, Namespace: "test-ns"}, rb); err != nil {
+			t.Fatalf("expected RoleBinding %s to exist, got: %v", rbName, err)
+		}
+		if rb.RoleRef.Kind != "Role" || rb.RoleRef.Name != rbName {
+			t.Errorf("RoleBinding %s must reference Role %s, got %+v", rbName, rbName, rb.RoleRef)
+		}
+		if len(rb.Subjects) != 1 || rb.Subjects[0].Kind != "ServiceAccount" ||
+			rb.Subjects[0].Name != rbName || rb.Subjects[0].Namespace != "test-ns" {
+			t.Errorf("RoleBinding %s must bind SA %s in test-ns, got %+v", rbName, rbName, rb.Subjects)
+		}
+		if len(rb.OwnerReferences) != 1 || rb.OwnerReferences[0].UID != "ras-uid" {
+			t.Errorf("RoleBinding %s must be owner-referenced to the AutoScaler, got %+v", rbName, rb.OwnerReferences)
+		}
+	}
+
+	// No cluster-scoped RBAC may be created.
+	crs := &rbacv1.ClusterRoleList{}
+	if err := cl.List(context.Background(), crs); err != nil {
+		t.Fatalf("failed to list ClusterRoles: %v", err)
+	}
+	if len(crs.Items) != 0 {
+		t.Errorf("expected no ClusterRoles to be created, got %d", len(crs.Items))
+	}
+	crbs := &rbacv1.ClusterRoleBindingList{}
+	if err := cl.List(context.Background(), crbs); err != nil {
+		t.Fatalf("failed to list ClusterRoleBindings: %v", err)
+	}
+	if len(crbs.Items) != 0 {
+		t.Errorf("expected no ClusterRoleBindings to be created, got %d", len(crbs.Items))
+	}
+}
+
+func TestEnsureRBAC_DefaultRoleNames(t *testing.T) {
+	scheme := newRBACTestScheme(t)
+	ras := newTestRAS()
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &AutoScalerReconciler{Client: cl, Scheme: scheme}
+
+	spec := &parsedSpec{prefillRoleName: "prefill", decodeRoleName: "decode"}
+	if err := r.ensureRBAC(context.Background(), ras, spec); err != nil {
+		t.Fatalf("ensureRBAC failed: %v", err)
+	}
+
+	plannerRole := &rbacv1.Role{}
+	if err := cl.Get(context.Background(),
+		types.NamespacedName{Name: "test-rbg-planner", Namespace: "test-ns"}, plannerRole); err != nil {
+		t.Fatalf("expected planner Role to exist, got: %v", err)
+	}
+	scaleRule := findRule(plannerRole.Rules, "rolebasedgroupscalingadapters/scale")
+	if scaleRule == nil {
+		t.Fatalf("planner Role must grant scale access, got %+v", plannerRole.Rules)
+	}
+	want := []string{"test-rbg-prefill", "test-rbg-decode"}
+	if !reflect.DeepEqual(scaleRule.ResourceNames, want) {
+		t.Errorf("scale resourceNames = %v, want %v", scaleRule.ResourceNames, want)
+	}
+}
+
+func TestEnsureRBAC_UpdatesResourceNamesWhenRoleNamesChange(t *testing.T) {
+	scheme := newRBACTestScheme(t)
+	ras := newTestRAS()
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &AutoScalerReconciler{Client: cl, Scheme: scheme}
+
+	if err := r.ensureRBAC(context.Background(), ras, &parsedSpec{prefillRoleName: "p1", decodeRoleName: "d1"}); err != nil {
+		t.Fatalf("first ensureRBAC failed: %v", err)
+	}
+	if err := r.ensureRBAC(context.Background(), ras, &parsedSpec{prefillRoleName: "p2", decodeRoleName: "d2"}); err != nil {
+		t.Fatalf("second ensureRBAC failed: %v", err)
+	}
+
+	plannerRole := &rbacv1.Role{}
+	if err := cl.Get(context.Background(),
+		types.NamespacedName{Name: "test-rbg-planner", Namespace: "test-ns"}, plannerRole); err != nil {
+		t.Fatalf("expected planner Role to exist, got: %v", err)
+	}
+	scaleRule := findRule(plannerRole.Rules, "rolebasedgroupscalingadapters/scale")
+	if scaleRule == nil {
+		t.Fatalf("planner Role must grant scale access, got %+v", plannerRole.Rules)
+	}
+	want := []string{"test-rbg-p2", "test-rbg-d2"}
+	if !reflect.DeepEqual(scaleRule.ResourceNames, want) {
+		t.Errorf("scale resourceNames = %v, want %v", scaleRule.ResourceNames, want)
+	}
+}
+
+func TestCreateProfilingJob_UsesProfilerServiceAccount(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := batchv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add batch scheme: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add core scheme: %v", err)
+	}
+
+	ras := newTestRAS()
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &AutoScalerReconciler{Client: cl, Scheme: scheme}
+
+	spec := &parsedSpec{
+		profilingImage: "ghcr.io/rolebasedgroup/rbg-profiler:latest",
+		backend:        "sglang-oai",
+	}
+	if err := r.createProfilingJob(context.Background(), ras, spec, "test-rbg-profiling", "test-rbg-profiling"); err != nil {
+		t.Fatalf("createProfilingJob failed: %v", err)
+	}
+
+	created := &batchv1.Job{}
+	if err := cl.Get(context.Background(),
+		types.NamespacedName{Name: "test-rbg-profiling", Namespace: "test-ns"}, created); err != nil {
+		t.Fatalf("failed to get created job: %v", err)
+	}
+	if got := created.Spec.Template.Spec.ServiceAccountName; got != "test-rbg-profiler" {
+		t.Errorf("profiling job must use the dedicated profiler SA, got %q", got)
 	}
 }
 
