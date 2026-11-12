@@ -1,0 +1,41 @@
+# One-shot pod that verifies the planner ServiceAccount can scale exactly its
+# two role adapters through the rolebasedgroupscalingadapters scale
+# subresource, and is denied on any other adapter (here: the router role).
+#
+# The pod runs under the AutoScaler-created planner ServiceAccount
+# (<as-name>-planner) and issues the same merge-patch the planner issues.
+# Replace image registry/tag and the adapter names as needed.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: verify-scale
+  namespace: default
+spec:
+  serviceAccountName: qwen-pd-planner
+  imagePullSecrets:
+    - name: regcred
+  restartPolicy: Never
+  containers:
+    - name: test
+      image:  <registry>/rbg-planner:latest
+      command:
+        - python3
+        - -c
+        - |
+          from kubernetes import client, config
+          config.load_incluster_config()
+          api = client.CustomObjectsApi()
+          for name in ['qwen-pd-prefill', 'qwen-pd-decode']:
+              r = api.patch_namespaced_custom_object_scale(
+                  group='workloads.x-k8s.io', version='v1alpha2', namespace='default',
+                  plural='rolebasedgroupscalingadapters', name=name,
+                  body={'spec': {'replicas': 1}})
+              print('PATCHED scale', name, '->', r['spec']['replicas'])
+          try:
+              api.patch_namespaced_custom_object_scale(
+                  group='workloads.x-k8s.io', version='v1alpha2', namespace='default',
+                  plural='rolebasedgroupscalingadapters', name='qwen-pd-router',
+                  body={'spec': {'replicas': 1}})
+              print('ERROR: router patch unexpectedly allowed')
+          except Exception as e:
+              print('router patch correctly denied:', getattr(e, 'status', e))

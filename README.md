@@ -88,6 +88,11 @@ This design allows the same operator and CRD to support fundamentally different 
 
 ## Quick Start
 
+For a complete worked example on a real cluster -- including metrics
+scraping setup, load generation, and troubleshooting for the most common
+failure modes -- follow the
+[end-to-end walkthrough](docs/e2e-walkthrough.md).
+
 ### Prerequisites
 
 - Kubernetes cluster with [RBG controller](https://github.com/rolebasedgroup/rbg) installed
@@ -148,7 +153,7 @@ metadata:
   namespace: inference
 spec:
   scalingInterval: 180    # seconds between scaling decisions
-  backend: sglang-oai     # inference engine backend (profiling bench + metrics)
+  backend: sglang-oai     # bench + metrics backend; use sglang-pd-native for SGLang PD-disaggregated deployments
 
   # Scaling pattern: pdDisaggregated (supported) | unified (reserved, not yet implemented)
   pattern:
@@ -219,7 +224,7 @@ spec:
 kubectl apply -f config/samples/roleautoscaler_full.yaml
 ```
 
-### Step 4: Observe
+### Observe the AutoScaler
 
 ```bash
 # Watch the AutoScaler status
@@ -253,14 +258,14 @@ INFO  Scaling role decode: 1 -> 4
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `spec.scalingInterval` | int | `180` | Seconds between scaling decisions |
-| `spec.backend` | string | `sglang-oai` | Inference engine backend used by both profiling (bench) and metrics collection, e.g. `sglang-oai`, `vllm`, `vllm-chat` |
+| `spec.backend` | string | `sglang-oai` | Inference engine backend used by both profiling (bench) and metrics collection, e.g. `sglang-oai`, `sglang-pd-native`, `vllm`, `vllm-chat`. Use `sglang-pd-native` for SGLang PD-disaggregated deployments; plain OpenAI backends produce empty profiling data against PD engines |
 | `spec.pattern.pdDisaggregated.prefill.roleName` | string | (required) | Prefill role name in the RBG |
 | `spec.pattern.pdDisaggregated.prefill.maxReplicas` | int | (required) | Maximum prefill replicas |
 | `spec.pattern.pdDisaggregated.prefill.minReplicas` | int | `1` | Minimum prefill replicas |
 | `spec.pattern.pdDisaggregated.decode.roleName` | string | (required) | Decode role name in the RBG |
 | `spec.pattern.pdDisaggregated.decode.maxReplicas` | int | (required) | Maximum decode replicas |
 | `spec.pattern.pdDisaggregated.decode.minReplicas` | int | `1` | Minimum decode replicas |
-| `spec.implementation.dynamoPlanner.modelName` | string | (required) | Model name for Prometheus label filtering and tokenizer resolution |
+| `spec.implementation.dynamoPlanner.modelName` | string | (required) | Model name for Prometheus label filtering and tokenizer resolution. Must exactly match the engine's model label -- for SGLang, the value of `--model-path` |
 | `spec.implementation.dynamoPlanner.sla.ttft` | float | `500` | Target TTFT SLA (ms) |
 | `spec.implementation.dynamoPlanner.sla.itl` | float | `50` | Target ITL SLA (ms) |
 | `spec.implementation.dynamoPlanner.loadPredictor` | string | `arima` | Load predictor: `arima`, `constant`, `prophet` |
