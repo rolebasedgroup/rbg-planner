@@ -1,5 +1,7 @@
 FROM python:3.11-slim
 
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/cache/apt/
+
 WORKDIR /app
 
 COPY requirements.txt .
