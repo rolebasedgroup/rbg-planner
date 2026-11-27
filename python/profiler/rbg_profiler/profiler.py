@@ -26,18 +26,11 @@ from rbg_profiler.rbg_discoverer import RoleEndpoint
 
 logger = logging.getLogger(__name__)
 
-
-def parse_result_labels(values) -> dict | None:
-    """Convert repeated --result-label k=v args into a label dict."""
-    if not values:
-        return None
-    labels = {}
-    for item in values:
-        if "=" not in item:
-            raise ValueError(f"invalid --result-label {item!r}: expected k=v")
-        key, _, value = item.partition("=")
-        labels[key] = value
-    return labels
+# Convention shared with the Go operator (internal/controller:
+# ManagedLabelKey/ManagedLabelValue). Every object the rbg-planner tooling
+# produces carries this label so the operator's label-filtered informers can
+# see it; keep both definitions in sync.
+MANAGED_LABEL = {"rbg-planner.io/managed": "true"}
 
 
 def _update_configmap(
@@ -45,7 +38,6 @@ def _update_configmap(
     namespace: str,
     prefill_data: dict,
     decode_data: dict,
-    labels: dict | None = None,
 ):
     """Create or update a Kubernetes ConfigMap with profiling results."""
     try:
@@ -64,16 +56,15 @@ def _update_configmap(
     try:
         existing = v1.read_namespaced_config_map(name=name, namespace=namespace)
         # The replace body is built from scratch, so merge the existing
-        # labels (plus managed ones) or the update would strip them.
+        # labels (plus the managed one) or the update would strip them.
         merged = dict(existing.metadata.labels or {})
-        merged.update(labels or {})
-        cm.metadata.labels = merged or None
+        merged.update(MANAGED_LABEL)
+        cm.metadata.labels = merged
         v1.replace_namespaced_config_map(name=name, namespace=namespace, body=cm)
         logger.info("ConfigMap %s/%s updated", namespace, name)
     except client.ApiException as e:
         if e.status == 404:
-            if labels:
-                cm.metadata.labels = dict(labels)
+            cm.metadata.labels = dict(MANAGED_LABEL)
             v1.create_namespaced_config_map(namespace=namespace, body=cm)
             logger.info("ConfigMap %s/%s created", namespace, name)
         else:
@@ -205,7 +196,6 @@ async def run_profiling(
             args.namespace,
             prefill_data,
             decode_data,
-            labels=parse_result_labels(getattr(args, "result_labels", None)),
         )
 
     # Print JSON to stdout for recovery from pod logs

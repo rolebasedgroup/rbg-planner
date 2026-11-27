@@ -91,15 +91,6 @@ def main():
         default=os.environ.get("DECODE_ROLE_NAME", "decode"),
         help="Decode role name in RBG",
     )
-    parser.add_argument(
-        "--result-label",
-        action="append",
-        default=None,
-        dest="result_labels",
-        metavar="K=V",
-        help="Label stamped on the result ConfigMap (repeatable, e.g. "
-        "--result-label rbg-planner.io/managed=true)",
-    )
 
     # Fallbacks used when RBG discovery cannot determine a value.
     parser.add_argument(

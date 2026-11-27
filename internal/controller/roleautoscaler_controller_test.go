@@ -1894,7 +1894,7 @@ func TestEnsureRBAC_StampManagedLabels(t *testing.T) {
 	}
 }
 
-func TestCreateProfilingJob_ManagedLabelsAndResultLabelArgs(t *testing.T) {
+func TestCreateProfilingJob_ManagedLabels(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := batchv1.AddToScheme(scheme); err != nil {
 		t.Fatalf("failed to add batch scheme: %v", err)
@@ -1923,15 +1923,13 @@ func TestCreateProfilingJob_ManagedLabelsAndResultLabelArgs(t *testing.T) {
 		t.Errorf("Job labels = %v, want managed label", created.Labels)
 	}
 
+	// The managed label on the result ConfigMap is stamped by the profiler
+	// itself (a cross-component convention), not injected via CLI args.
 	args := created.Spec.Template.Spec.Containers[0].Args
-	found := false
 	for i, a := range args {
-		if a == "--result-label" && i+1 < len(args) && args[i+1] == "rbg-planner.io/managed=true" {
-			found = true
+		if a == "--result-label" || a == "--output-label" {
+			t.Errorf("args[%d] = %q: the profiler stamps the managed label itself, no label arg expected: %v", i, a, args)
 		}
-	}
-	if !found {
-		t.Errorf("expected args to contain '--result-label rbg-planner.io/managed=true', got %v", args)
 	}
 }
 

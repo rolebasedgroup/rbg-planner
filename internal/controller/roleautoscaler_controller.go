@@ -726,7 +726,6 @@ func (r *AutoScalerReconciler) createProfilingJob(ctx context.Context, ras *unst
 	if spec.profilingInputFormat != "" && spec.profilingInputFormat != "auto" {
 		args = append(args, "--input-format", spec.profilingInputFormat)
 	}
-	args = append(args, "--result-label", ManagedLabelKey+"="+ManagedLabelValue)
 
 	backoffLimit := int32(1)
 	activeDeadline := int64(1800)
