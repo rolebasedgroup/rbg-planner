@@ -36,7 +36,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/yaml"
 )
 
@@ -1852,5 +1854,153 @@ func TestShouldShortCircuitFailed(t *testing.T) {
 				t.Errorf("shouldShortCircuitFailed() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestEnsureRBAC_StampManagedLabels(t *testing.T) {
+	scheme := newRBACTestScheme(t)
+	ras := newTestRAS()
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &AutoScalerReconciler{Client: cl, Scheme: scheme}
+
+	spec := &parsedSpec{prefillRoleName: "p-engine", decodeRoleName: "d-engine"}
+	if err := r.ensureRBAC(context.Background(), ras, spec); err != nil {
+		t.Fatalf("ensureRBAC failed: %v", err)
+	}
+
+	for _, name := range []string{"test-rbg-planner", "test-rbg-profiler"} {
+		sa := &corev1.ServiceAccount{}
+		if err := cl.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "test-ns"}, sa); err != nil {
+			t.Fatalf("failed to get SA %s: %v", name, err)
+		}
+		if got := sa.Labels["rbg-planner.io/managed"]; got != "true" {
+			t.Errorf("SA %s labels = %v, want managed label", name, sa.Labels)
+		}
+		role := &rbacv1.Role{}
+		if err := cl.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "test-ns"}, role); err != nil {
+			t.Fatalf("failed to get Role %s: %v", name, err)
+		}
+		if got := role.Labels["rbg-planner.io/managed"]; got != "true" {
+			t.Errorf("Role %s labels = %v, want managed label", name, role.Labels)
+		}
+		rb := &rbacv1.RoleBinding{}
+		if err := cl.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "test-ns"}, rb); err != nil {
+			t.Fatalf("failed to get RoleBinding %s: %v", name, err)
+		}
+		if got := rb.Labels["rbg-planner.io/managed"]; got != "true" {
+			t.Errorf("RoleBinding %s labels = %v, want managed label", name, rb.Labels)
+		}
+	}
+}
+
+func TestCreateProfilingJob_ManagedLabelsAndResultLabelArgs(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := batchv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add batch scheme: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add core scheme: %v", err)
+	}
+
+	ras := newTestRAS()
+	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &AutoScalerReconciler{Client: cl, Scheme: scheme}
+
+	spec := &parsedSpec{
+		profilingImage: "ghcr.io/rolebasedgroup/rbg-profiler:latest",
+		backend:        "sglang-oai",
+	}
+	if err := r.createProfilingJob(context.Background(), ras, spec, "test-rbg-profiling", "test-rbg-profiling"); err != nil {
+		t.Fatalf("createProfilingJob failed: %v", err)
+	}
+
+	created := &batchv1.Job{}
+	if err := cl.Get(context.Background(), types.NamespacedName{Name: "test-rbg-profiling", Namespace: "test-ns"}, created); err != nil {
+		t.Fatalf("failed to get created job: %v", err)
+	}
+	if got := created.Labels["rbg-planner.io/managed"]; got != "true" {
+		t.Errorf("Job labels = %v, want managed label", created.Labels)
+	}
+
+	args := created.Spec.Template.Spec.Containers[0].Args
+	found := false
+	for i, a := range args {
+		if a == "--result-label" && i+1 < len(args) && args[i+1] == "rbg-planner.io/managed=true" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected args to contain '--result-label rbg-planner.io/managed=true', got %v", args)
+	}
+}
+
+func TestEnsurePlannerDeployment_StampManagedLabels(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add apps scheme: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add core scheme: %v", err)
+	}
+
+	ras := newTestRAS()
+	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &AutoScalerReconciler{Client: cl, Scheme: scheme}
+
+	spec := &parsedSpec{plannerImage: "ghcr.io/rolebasedgroup/rbg-planner:latest"}
+	if err := r.ensurePlannerDeployment(context.Background(), ras, spec, "test-profiling-cm", 1, 1); err != nil {
+		t.Fatalf("ensurePlannerDeployment failed: %v", err)
+	}
+
+	created := &appsv1.Deployment{}
+	if err := cl.Get(context.Background(), types.NamespacedName{Name: "test-rbg-planner", Namespace: "test-ns"}, created); err != nil {
+		t.Fatalf("failed to get created deployment: %v", err)
+	}
+	if got := created.Labels["rbg-planner.io/managed"]; got != "true" {
+		t.Errorf("Deployment labels = %v, want managed label", created.Labels)
+	}
+	if got := created.Spec.Template.Labels["rbg-planner.io/managed"]; got != "true" {
+		t.Errorf("Deployment pod template labels = %v, want managed label", created.Spec.Template.Labels)
+	}
+}
+
+func TestCreateOrVerify_AlreadyExistsWithManagedLabelsHintsMigration(t *testing.T) {
+	scheme := newRBACTestScheme(t)
+	ras := newTestRAS()
+
+	existing := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            "test-rbg-planner",
+			Namespace:       "test-ns",
+			OwnerReferences: []metav1.OwnerReference{ownerRef(ras)},
+		},
+	}
+
+	// Simulate a label-filtered cache: the unlabeled object is invisible to
+	// Get (NotFound) but Create still collides with it on the API server.
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(existing).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				return apierrors.NewNotFound(schema.GroupResource{}, key.Name)
+			},
+		}).Build()
+	r := &AutoScalerReconciler{Client: cl, Scheme: scheme}
+
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-rbg-planner", Namespace: "test-ns"},
+	}
+	err := r.createOrVerify(context.Background(), sa, func(existing client.Object) error { return nil })
+	if err == nil {
+		t.Fatal("expected AlreadyExists error, got nil")
+	}
+	if !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("expected wrapped AlreadyExists error, got: %v", err)
+	}
+	for _, hint := range []string{"rbg-planner.io/managed", "label", "test-rbg-planner"} {
+		if !strings.Contains(err.Error(), hint) {
+			t.Errorf("error %q should mention %q", err, hint)
+		}
 	}
 }

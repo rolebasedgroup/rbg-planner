@@ -20,6 +20,10 @@ import (
 	"flag"
 	"os"
 
+	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -78,6 +82,7 @@ func main() {
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "rbg-planner.inference-extension.rolebasedgroup.io",
 	}
+	byObject := map[client.Object]cache.ByObject{}
 	if rbgWatchLabelSelector != "" {
 		sel, err := labels.Parse(rbgWatchLabelSelector)
 		if err != nil {
@@ -90,12 +95,23 @@ func main() {
 			Version: "v1alpha2",
 			Kind:    "RoleBasedGroup",
 		})
-		ctrlOpts.Cache = cache.Options{
-			ByObject: map[client.Object]cache.ByObject{
-				rbgObj: {Label: sel},
-			},
-		}
+		byObject[rbgObj] = cache.ByObject{Label: sel}
 	}
+	// The operator only ever reconciles objects it created itself, which all
+	// carry the managed label; filtering their informers by it pushes the
+	// filtering server-side (smaller LIST responses, fewer WATCH events).
+	managedSel := controller.ManagedLabelSelector()
+	for _, obj := range []client.Object{
+		&corev1.ConfigMap{},
+		&corev1.ServiceAccount{},
+		&rbacv1.Role{},
+		&rbacv1.RoleBinding{},
+		&appsv1.Deployment{},
+		&batchv1.Job{},
+	} {
+		byObject[obj] = cache.ByObject{Label: managedSel}
+	}
+	ctrlOpts.Cache = cache.Options{ByObject: byObject}
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrlOpts)
 	if err != nil {

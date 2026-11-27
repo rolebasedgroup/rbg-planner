@@ -54,7 +54,7 @@ def main():
         "--backend",
         default=os.environ.get("BACKEND", os.environ.get("ENGINE", "sglang-oai")),
         help="Bench backend name (e.g. sglang-oai, vllm-chat). "
-             "Also accepts --engine for backward compatibility.",
+        "Also accepts --engine for backward compatibility.",
     )
     # Hidden alias for backward compatibility.
     parser.add_argument("--engine", dest="backend", help=argparse.SUPPRESS)
@@ -78,7 +78,7 @@ def main():
         type=int,
         default=int(os.environ.get("PD_BOOTSTRAP_PORT", "8998")),
         help="Prefill engine disaggregation bootstrap port "
-             "(sglang-pd-native backend only)",
+        "(sglang-pd-native backend only)",
     )
 
     parser.add_argument(
@@ -90,6 +90,15 @@ def main():
         "--decode-role-name",
         default=os.environ.get("DECODE_ROLE_NAME", "decode"),
         help="Decode role name in RBG",
+    )
+    parser.add_argument(
+        "--result-label",
+        action="append",
+        default=None,
+        dest="result_labels",
+        metavar="K=V",
+        help="Label stamped on the result ConfigMap (repeatable, e.g. "
+        "--result-label rbg-planner.io/managed=true)",
     )
 
     # Fallbacks used when RBG discovery cannot determine a value.
@@ -187,10 +196,15 @@ def main():
         sys.exit(1)
 
     try:
-        asyncio.run(run_profiling(
-            args, prefill_endpoint, decode_endpoint,
-            backend=args.backend, input_format=args.input_format,
-        ))
+        asyncio.run(
+            run_profiling(
+                args,
+                prefill_endpoint,
+                decode_endpoint,
+                backend=args.backend,
+                input_format=args.input_format,
+            )
+        )
     except Exception as e:
         logger.error(f"Profiling failed: {e}", exc_info=True)
         sys.exit(1)

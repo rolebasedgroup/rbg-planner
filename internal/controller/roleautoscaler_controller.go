@@ -35,6 +35,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -65,7 +66,22 @@ const (
 	rbgGroup   = "workloads.x-k8s.io"
 	rbgVersion = "v1alpha2"
 	rbgPlural  = "rolebasedgroups"
+
+	// ManagedLabelKey/Value is the fixed convention marking every object the
+	// operator (or its profiler Job) creates: ServiceAccounts, Roles,
+	// RoleBindings, profiling Jobs, planner Deployments and the profiling
+	// ConfigMap. The cache's informers for these types are server-side
+	// filtered by it (see ManagedLabelSelector), so objects without it are
+	// invisible to the operator.
+	ManagedLabelKey   = "rbg-planner.io/managed"
+	ManagedLabelValue = "true"
 )
+
+// ManagedLabelSelector filters the informer cache for operator-managed
+// object types down to objects carrying the managed label.
+func ManagedLabelSelector() labels.Selector {
+	return labels.SelectorFromSet(labels.Set{ManagedLabelKey: ManagedLabelValue})
+}
 
 // AutoScalerReconciler reconciles an AutoScaler object.
 type AutoScalerReconciler struct {
@@ -75,6 +91,17 @@ type AutoScalerReconciler struct {
 	PlannerImage       string
 	ProfilerImage      string
 	PrometheusEndpoint string
+}
+
+// stampManagedLabels sets the fixed managed label on obj, preserving any
+// labels already present.
+func stampManagedLabels(obj metav1.Object) {
+	existing := obj.GetLabels()
+	if existing == nil {
+		existing = map[string]string{}
+	}
+	existing[ManagedLabelKey] = ManagedLabelValue
+	obj.SetLabels(existing)
 }
 
 // +kubebuilder:rbac:groups=inference-extension.rolebasedgroup.io,resources=autoscalers,verbs=get;list;watch;update;patch
@@ -469,6 +496,7 @@ func (r *AutoScalerReconciler) ensureRBAC(ctx context.Context, ras *unstructured
 				OwnerReferences: []metav1.OwnerReference{ownerRef(ras)},
 			},
 		}
+		stampManagedLabels(sa)
 		if err := r.createOrVerify(ctx, sa, func(existing client.Object) error {
 			if !isOwnedBy(existing.GetOwnerReferences(), ras.GetUID()) {
 				return fmt.Errorf("ServiceAccount %s exists but is not owned by AutoScaler %s; refusing to adopt it", saName, name)
@@ -480,7 +508,7 @@ func (r *AutoScalerReconciler) ensureRBAC(ctx context.Context, ras *unstructured
 	}
 
 	newRole := func(saName string, rules []rbacv1.PolicyRule) *rbacv1.Role {
-		return &rbacv1.Role{
+		role := &rbacv1.Role{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:            saName,
 				Namespace:       namespace,
@@ -488,6 +516,8 @@ func (r *AutoScalerReconciler) ensureRBAC(ctx context.Context, ras *unstructured
 			},
 			Rules: rules,
 		}
+		stampManagedLabels(role)
+		return role
 	}
 
 	// Always rewrite the rules so spec role renames propagate.
@@ -531,6 +561,7 @@ func (r *AutoScalerReconciler) ensureRBAC(ctx context.Context, ras *unstructured
 				},
 			},
 		}
+		stampManagedLabels(rb)
 		if err := r.createOrVerify(ctx, rb, func(existing client.Object) error {
 			existingRB, ok := existing.(*rbacv1.RoleBinding)
 			if !ok {
@@ -695,6 +726,7 @@ func (r *AutoScalerReconciler) createProfilingJob(ctx context.Context, ras *unst
 	if spec.profilingInputFormat != "" && spec.profilingInputFormat != "auto" {
 		args = append(args, "--input-format", spec.profilingInputFormat)
 	}
+	args = append(args, "--result-label", ManagedLabelKey+"="+ManagedLabelValue)
 
 	backoffLimit := int32(1)
 	activeDeadline := int64(1800)
@@ -727,8 +759,9 @@ func (r *AutoScalerReconciler) createProfilingJob(ctx context.Context, ras *unst
 			},
 		},
 	}
+	stampManagedLabels(job)
 
-	return r.Create(ctx, job)
+	return r.createManaged(ctx, job)
 }
 
 // --- Planner Deployment ---
@@ -801,13 +834,17 @@ func (r *AutoScalerReconciler) ensurePlannerDeployment(ctx context.Context, ras 
 			},
 		},
 	}
+	// Stamp after construction so the selector MatchLabels stay untouched
+	// (Deployment selectors are immutable); template labels may gain extras.
+	stampManagedLabels(desired)
+	stampManagedLabels(&desired.Spec.Template)
 
 	// Check if Deployment already exists.
 	existing := &appsv1.Deployment{}
 	err := r.Get(ctx, types.NamespacedName{Name: deployName, Namespace: namespace}, existing)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.Create(ctx, desired)
+			return r.createManaged(ctx, desired)
 		}
 		return err
 	}
@@ -1103,12 +1140,27 @@ func ownerRef(ras *unstructured.Unstructured) metav1.OwnerReference {
 // fully derived from the AutoScaler name (ServiceAccount, RoleBinding) must
 // not be adopted or rewritten, otherwise workloads would run under an
 // unexpected identity.
+// createManaged creates obj and enriches an AlreadyExists conflict with a
+// migration hint: an existing object without the managed label is invisible
+// to the label-filtered cache, so the reconciler only discovers it at
+// Create time.
+func (r *AutoScalerReconciler) createManaged(ctx context.Context, obj client.Object) error {
+	err := r.Create(ctx, obj)
+	if err != nil && apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf(
+			"%s %q exists but is invisible to the label-filtered cache: it lacks the managed label %s=%s; relabel or delete it so the operator can (re)create it: %w",
+			obj.GetObjectKind().GroupVersionKind().Kind, obj.GetName(), ManagedLabelKey, ManagedLabelValue, err,
+		)
+	}
+	return err
+}
+
 func (r *AutoScalerReconciler) createOrVerify(ctx context.Context, obj client.Object, verify func(existing client.Object) error) error {
 	key := types.NamespacedName{Name: obj.GetName(), Namespace: obj.GetNamespace()}
 	err := r.Get(ctx, key, obj)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.Create(ctx, obj)
+			return r.createManaged(ctx, obj)
 		}
 		return err
 	}
@@ -1129,7 +1181,7 @@ func (r *AutoScalerReconciler) createOrUpdate(ctx context.Context, obj client.Ob
 	err := r.Get(ctx, key, obj)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.Create(ctx, obj)
+			return r.createManaged(ctx, obj)
 		}
 		return err
 	}

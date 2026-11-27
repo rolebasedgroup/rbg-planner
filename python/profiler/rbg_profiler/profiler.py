@@ -27,7 +27,26 @@ from rbg_profiler.rbg_discoverer import RoleEndpoint
 logger = logging.getLogger(__name__)
 
 
-def _update_configmap(name: str, namespace: str, prefill_data: dict, decode_data: dict):
+def parse_result_labels(values) -> dict | None:
+    """Convert repeated --result-label k=v args into a label dict."""
+    if not values:
+        return None
+    labels = {}
+    for item in values:
+        if "=" not in item:
+            raise ValueError(f"invalid --result-label {item!r}: expected k=v")
+        key, _, value = item.partition("=")
+        labels[key] = value
+    return labels
+
+
+def _update_configmap(
+    name: str,
+    namespace: str,
+    prefill_data: dict,
+    decode_data: dict,
+    labels: dict | None = None,
+):
     """Create or update a Kubernetes ConfigMap with profiling results."""
     try:
         config.load_incluster_config()
@@ -43,11 +62,18 @@ def _update_configmap(name: str, namespace: str, prefill_data: dict, decode_data
         },
     )
     try:
-        v1.read_namespaced_config_map(name=name, namespace=namespace)
+        existing = v1.read_namespaced_config_map(name=name, namespace=namespace)
+        # The replace body is built from scratch, so merge the existing
+        # labels (plus managed ones) or the update would strip them.
+        merged = dict(existing.metadata.labels or {})
+        merged.update(labels or {})
+        cm.metadata.labels = merged or None
         v1.replace_namespaced_config_map(name=name, namespace=namespace, body=cm)
         logger.info("ConfigMap %s/%s updated", namespace, name)
     except client.ApiException as e:
         if e.status == 404:
+            if labels:
+                cm.metadata.labels = dict(labels)
             v1.create_namespaced_config_map(namespace=namespace, body=cm)
             logger.info("ConfigMap %s/%s created", namespace, name)
         else:
@@ -77,9 +103,7 @@ async def run_profiling(
 
     backend_kwargs = {}
     if backend == "sglang-pd-native":
-        backend_kwargs["bootstrap_port"] = int(
-            getattr(args, "pd_bootstrap_port", 8998)
-        )
+        backend_kwargs["bootstrap_port"] = int(getattr(args, "pd_bootstrap_port", 8998))
     bench_backend = create_bench_backend(
         backend, input_format=input_format, **backend_kwargs
     )
@@ -157,22 +181,32 @@ async def run_profiling(
     for i, isl in enumerate(prefill_data["prefill_isl"]):
         logger.info(
             "  ISL=%d: TTFT=%.1fms, thpt/gpu=%.0f tok/s",
-            isl, prefill_data["prefill_ttft"][i], prefill_data["prefill_thpt_per_gpu"][i],
+            isl,
+            prefill_data["prefill_ttft"][i],
+            prefill_data["prefill_thpt_per_gpu"][i],
         )
     logger.info("Decode: %d points", len(decode_data["x_kv_usage"]))
     if decode_data["z_thpt_per_gpu"]:
         logger.info(
             "  thpt/gpu range: %.0f - %.0f tok/s",
-            min(decode_data["z_thpt_per_gpu"]), max(decode_data["z_thpt_per_gpu"]),
+            min(decode_data["z_thpt_per_gpu"]),
+            max(decode_data["z_thpt_per_gpu"]),
         )
         logger.info(
             "  ITL range: %.1f - %.1f ms",
-            min(decode_data["z_itl"]), max(decode_data["z_itl"]),
+            min(decode_data["z_itl"]),
+            max(decode_data["z_itl"]),
         )
 
     # Update ConfigMap
     if args.update_configmap:
-        _update_configmap(args.output_configmap, args.namespace, prefill_data, decode_data)
+        _update_configmap(
+            args.output_configmap,
+            args.namespace,
+            prefill_data,
+            decode_data,
+            labels=parse_result_labels(getattr(args, "result_labels", None)),
+        )
 
     # Print JSON to stdout for recovery from pod logs
     print("\n===PREFILL_RAW_DATA_JSON_START===")
