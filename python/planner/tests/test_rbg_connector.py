@@ -6,7 +6,11 @@ import pytest
 from kubernetes.config.config_exception import ConfigException
 
 from rbg_planner.rbg_connector import RBGConnector
-from rbg_planner.utils.exceptions import RBGNotFoundError, RoleNotFoundError
+from rbg_planner.utils.exceptions import (
+    RBGNotFoundError,
+    RoleNotFoundError,
+    ScalingAdapterNotFoundError,
+)
 
 
 @pytest.fixture
@@ -101,9 +105,8 @@ class TestScaleViaRBGSA:
         mock_api.patch_namespaced_custom_object_scale.return_value = {}
 
         connector = RBGConnector(rbg_name="test-rbg", rbg_namespace="default")
-        result = connector._try_scale_via_rbgsa("prefill", 4)
+        connector._scale_via_rbgsa("prefill", 4)
 
-        assert result is True
         mock_api.patch_namespaced_custom_object_scale.assert_called_once_with(
             group="workloads.x-k8s.io",
             version="v1alpha2",
@@ -113,30 +116,26 @@ class TestScaleViaRBGSA:
             body={"spec": {"replicas": 4}},
         )
 
-    def test_scale_rbgsa_not_found_falls_back(self, mock_k8s):
+    def test_scale_rbgsa_not_found_raises(self, mock_k8s):
         mock_api, mock_client = mock_k8s
         exc = mock_client.ApiException(status=404)
         mock_api.patch_namespaced_custom_object_scale.side_effect = exc
 
         connector = RBGConnector(rbg_name="test-rbg", rbg_namespace="default")
-        result = connector._try_scale_via_rbgsa("prefill", 4)
+        with pytest.raises(ScalingAdapterNotFoundError) as exc_info:
+            connector._scale_via_rbgsa("prefill", 4)
 
-        assert result is False
+        assert "test-rbg-prefill" in str(exc_info.value)
+        assert "scalingAdapter" in str(exc_info.value)
 
-
-class TestPatchRBGRoleReplicas:
-    def test_patch_success(self, mock_k8s, sample_rbg):
-        mock_api, _ = mock_k8s
-        mock_api.get_namespaced_custom_object.return_value = sample_rbg
-        mock_api.patch_namespaced_custom_object.return_value = {}
+    def test_scale_other_api_error_propagates(self, mock_k8s):
+        mock_api, mock_client = mock_k8s
+        exc = mock_client.ApiException(status=403)
+        mock_api.patch_namespaced_custom_object_scale.side_effect = exc
 
         connector = RBGConnector(rbg_name="test-rbg", rbg_namespace="default")
-        connector._patch_rbg_role_replicas("decode", 5)
-
-        mock_api.patch_namespaced_custom_object.assert_called_once()
-        call_kwargs = mock_api.patch_namespaced_custom_object.call_args[1]
-        assert call_kwargs["body"] == [{"op": "replace", "path": "/spec/roles/1/replicas", "value": 5}]
-        assert call_kwargs["_content_type"] == "application/json-patch+json"
+        with pytest.raises(mock_client.ApiException):
+            connector._scale_via_rbgsa("prefill", 4)
 
 
 class TestIsReady:

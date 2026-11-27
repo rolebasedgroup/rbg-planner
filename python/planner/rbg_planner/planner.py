@@ -433,7 +433,14 @@ class Planner:
                     desired_replicas=next_num_d,
                 ),
             ]
-            await self.connector.set_replicas(target_replicas, blocking=False)
+            try:
+                await self.connector.set_replicas(target_replicas, blocking=False)
+            except Exception as e:
+                # A scaling failure must not crash the pod (crash-loop);
+                # log and retry on the next adjustment cycle. The operator
+                # prechecks scalingAdapter on the RBG, so hitting this
+                # means the RBG changed underneath us.
+                logger.error(f"Failed to apply scaling: {e}")
 
     async def run(self):
         """Main planner loop."""
