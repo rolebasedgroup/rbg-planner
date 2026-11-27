@@ -20,10 +20,19 @@ import (
 	"flag"
 	"os"
 
+	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -49,6 +58,7 @@ func main() {
 	var plannerImage string
 	var profilerImage string
 	var prometheusEndpoint string
+	var rbgWatchLabelSelector string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metric endpoint binds to.")
 	flag.StringVar(&healthProbeAddr, "health-probe-bind-address", ":8081", "The address the health probe endpoint binds to.")
@@ -56,6 +66,8 @@ func main() {
 	flag.StringVar(&plannerImage, "planner-image", "", "Override default planner image.")
 	flag.StringVar(&profilerImage, "profiler-image", "", "Override default profiler image.")
 	flag.StringVar(&prometheusEndpoint, "prometheus-endpoint", "", "Override default Prometheus endpoint.")
+	flag.StringVar(&rbgWatchLabelSelector, "rbg-watch-label-selector", "",
+		"Label selector restricting which RoleBasedGroups the operator lists and watches (empty = watch all).")
 
 	opts := zap.Options{Development: true}
 	opts.BindFlags(flag.CommandLine)
@@ -63,13 +75,45 @@ func main() {
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	ctrlOpts := ctrl.Options{
 		Scheme:                 scheme,
 		Metrics:                metricsserver.Options{BindAddress: metricsAddr},
 		HealthProbeBindAddress: healthProbeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "rbg-planner.inference-extension.rolebasedgroup.io",
-	})
+	}
+	byObject := map[client.Object]cache.ByObject{}
+	if rbgWatchLabelSelector != "" {
+		sel, err := labels.Parse(rbgWatchLabelSelector)
+		if err != nil {
+			setupLog.Error(err, "invalid --rbg-watch-label-selector")
+			os.Exit(1)
+		}
+		rbgObj := &unstructured.Unstructured{}
+		rbgObj.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   "workloads.x-k8s.io",
+			Version: "v1alpha2",
+			Kind:    "RoleBasedGroup",
+		})
+		byObject[rbgObj] = cache.ByObject{Label: sel}
+	}
+	// The operator only ever reconciles objects it created itself, which all
+	// carry the managed label; filtering their informers by it pushes the
+	// filtering server-side (smaller LIST responses, fewer WATCH events).
+	managedSel := controller.ManagedLabelSelector()
+	for _, obj := range []client.Object{
+		&corev1.ConfigMap{},
+		&corev1.ServiceAccount{},
+		&rbacv1.Role{},
+		&rbacv1.RoleBinding{},
+		&appsv1.Deployment{},
+		&batchv1.Job{},
+	} {
+		byObject[obj] = cache.ByObject{Label: managedSel}
+	}
+	ctrlOpts.Cache = cache.Options{ByObject: byObject}
+
+	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrlOpts)
 	if err != nil {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)

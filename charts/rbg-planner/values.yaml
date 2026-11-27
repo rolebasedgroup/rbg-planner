@@ -24,6 +24,10 @@ profiler:
 prometheus:
   endpoint: http://prometheus-kube-prometheus-prometheus.monitoring.svc.cluster.local:9090
 
+# Label selector restricting which RoleBasedGroups the operator lists and
+# watches (server-side filtered). Empty = watch all RoleBasedGroups.
+rbgWatchLabelSelector: ""
+
 resources:
   limits:
     cpu: 500m

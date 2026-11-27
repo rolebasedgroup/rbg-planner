@@ -4,8 +4,10 @@
 # Settings that matter for the autoscaler:
 #   - prefill/decode run with `--enable-metrics`; SGLang serves /metrics on
 #     the main server port (8000), so the port is named `metrics`
-#   - prefill/decode set `scalingAdapter.enable: true` so the RBG controller
-#     creates RoleBasedGroupScalingAdapters, which the planner scales through
+#   - prefill/decode MUST set `scalingAdapter.enable: true` so the RBG
+#     controller creates RoleBasedGroupScalingAdapters. The adapter scale
+#     subresource is the only scaling path — the autoscaler rejects an RBG
+#     whose prefill/decode roles lack a scaling adapter
 apiVersion: workloads.x-k8s.io/v1alpha2
 kind: RoleBasedGroup
 metadata:

@@ -46,6 +46,10 @@ update-helm: manifests ## Sync generated manifests to Helm chart.
 	GOFLAGS=-mod=mod go run -modfile=hack/tools/yaml-processor/go.mod \
 	  sigs.k8s.io/kueue/hack/tools/yaml-processor \
 	  -zap-log-level=$(YAML_PROCESSOR_LOG_LEVEL) hack/processing-plan.yaml
+	# yaml-processor derives the output filename from the input basename
+	# (config/rbac/role.yaml), but the chart template follows the kubebuilder
+	# chart convention and is named clusterrole.yaml.
+	mv -f charts/rbg-planner/templates/rbac/role.yaml charts/rbg-planner/templates/rbac/clusterrole.yaml
 
 helm-lint: ## Lint the Helm chart.
 	helm lint charts/rbg-planner/ --set prometheus.endpoint=http://test:9090
@@ -92,13 +96,13 @@ run: generate fmt vet ## Run operator locally.
 ##@ Docker
 
 docker-build: ## Build operator Docker image.
-	docker build -t $(OPERATOR_IMG) .
+	docker build --platform linux/amd64 -t $(OPERATOR_IMG) .
 
 docker-build-planner: ## Build planner Docker image.
-	docker build -t $(PLANNER_IMG) -f python/planner/Dockerfile python/planner/
+	docker build --platform linux/amd64 -t $(PLANNER_IMG) -f python/planner/Dockerfile python/planner/
 
 docker-build-profiler: ## Build profiler Docker image.
-	docker build -t $(PROFILER_IMG) -f python/profiler/Dockerfile python/profiler/
+	docker build --platform linux/amd64 -t $(PROFILER_IMG) -f python/profiler/Dockerfile python/profiler/
 
 docker-build-all: docker-build docker-build-planner docker-build-profiler ## Build all Docker images.
 

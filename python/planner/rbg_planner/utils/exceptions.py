@@ -35,6 +35,21 @@ class EmptyTargetReplicasError(PlannerError):
         super().__init__("Target replicas list cannot be empty")
 
 
+class ScalingAdapterNotFoundError(PlannerError):
+    """Raised when the RBGSA scale subresource for a role is not found.
+
+    The adapter is the only supported scaling path — direct RoleBasedGroup
+    replica patching is no longer permitted.
+    """
+
+    def __init__(self, adapter_name: str, role_name: str):
+        super().__init__(
+            f"ScalingAdapter '{adapter_name}' for role '{role_name}' not found: "
+            "enable spec.roles[].scalingAdapter on the RBG; "
+            "direct RBG replica patching is no longer supported"
+        )
+
+
 class ProfilingDataNotFoundError(PlannerError):
     """Raised when profiling data files are not found."""
 

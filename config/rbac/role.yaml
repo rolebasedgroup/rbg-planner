@@ -8,7 +8,6 @@ rules:
   - ""
   resources:
   - configmaps
-  - serviceaccounts
   verbs:
   - create
   - get
@@ -22,6 +21,15 @@ rules:
   verbs:
   - create
   - patch
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts
+  verbs:
+  - create
+  - get
+  - list
+  - watch
 - apiGroups:
   - apps
   resources:
@@ -70,10 +78,17 @@ rules:
   - rbac.authorization.k8s.io
   resources:
   - rolebindings
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
   - roles
   verbs:
   - create
-  - delete
   - get
   - list
   - update
@@ -85,7 +100,6 @@ rules:
   verbs:
   - get
   - list
-  - patch
   - watch
 - apiGroups:
   - workloads.x-k8s.io

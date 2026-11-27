@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"time"
@@ -34,6 +35,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -41,7 +43,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	rbgv1alpha1 "github.com/rolebasedgroup/rbg-planner/api/v1alpha1"
 )
@@ -62,7 +66,22 @@ const (
 	rbgGroup   = "workloads.x-k8s.io"
 	rbgVersion = "v1alpha2"
 	rbgPlural  = "rolebasedgroups"
+
+	// ManagedLabelKey/Value is the fixed convention marking every object the
+	// operator (or its profiler Job) creates: ServiceAccounts, Roles,
+	// RoleBindings, profiling Jobs, planner Deployments and the profiling
+	// ConfigMap. The cache's informers for these types are server-side
+	// filtered by it (see ManagedLabelSelector), so objects without it are
+	// invisible to the operator.
+	ManagedLabelKey   = "rbg-planner.io/managed"
+	ManagedLabelValue = "true"
 )
+
+// ManagedLabelSelector filters the informer cache for operator-managed
+// object types down to objects carrying the managed label.
+func ManagedLabelSelector() labels.Selector {
+	return labels.SelectorFromSet(labels.Set{ManagedLabelKey: ManagedLabelValue})
+}
 
 // AutoScalerReconciler reconciles an AutoScaler object.
 type AutoScalerReconciler struct {
@@ -74,6 +93,17 @@ type AutoScalerReconciler struct {
 	PrometheusEndpoint string
 }
 
+// stampManagedLabels sets the fixed managed label on obj, preserving any
+// labels already present.
+func stampManagedLabels(obj metav1.Object) {
+	existing := obj.GetLabels()
+	if existing == nil {
+		existing = map[string]string{}
+	}
+	existing[ManagedLabelKey] = ManagedLabelValue
+	obj.SetLabels(existing)
+}
+
 // +kubebuilder:rbac:groups=inference-extension.rolebasedgroup.io,resources=autoscalers,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=inference-extension.rolebasedgroup.io,resources=autoscalers/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=inference-extension.rolebasedgroup.io,resources=autoscalers/finalizers,verbs=update
@@ -81,14 +111,15 @@ type AutoScalerReconciler struct {
 // per-CR planner/profiler Roles it creates. The API server's RBAC escalation
 // prevention rejects creating a Role granting verbs the creator does not
 // hold, so these must stay (see TestOperatorClusterRoleCoversDelegatedRules):
-// +kubebuilder:rbac:groups=workloads.x-k8s.io,resources=rolebasedgroups,verbs=get;list;watch;patch
+// +kubebuilder:rbac:groups=workloads.x-k8s.io,resources=rolebasedgroups,verbs=get;list;watch
 // +kubebuilder:rbac:groups=workloads.x-k8s.io,resources=rolebasedgroupscalingadapters/scale,verbs=patch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
-// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create
 
 func (r *AutoScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -158,6 +189,18 @@ func (r *AutoScalerReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
 		return ctrl.Result{}, err
+	}
+
+	// 4b. Scaling is only possible through the RBGSA scale subresource;
+	// reject early when a pattern role has no scaling adapter so the
+	// planner is never provisioned with an RBG it cannot scale.
+	if err := validateScalingAdapters(rbg, spec.prefillRoleName, spec.decodeRoleName); err != nil {
+		logger.Error(err, "scaling adapter validation failed")
+		r.Recorder.Event(ras, corev1.EventTypeWarning, "ScalingAdapterDisabled", err.Error())
+		if err := r.setPhase(ctx, ras, "Failed", "ScalingAdapterDisabled", err.Error()); err != nil {
+			logger.Error(err, "failed to set phase")
+		}
+		return ctrl.Result{RequeueAfter: 60 * time.Second}, nil
 	}
 
 	// Read GPU per engine from RBG spec for each role.
@@ -388,14 +431,15 @@ func (r *AutoScalerReconciler) parseRASSpec(ras *unstructured.Unstructured) (*pa
 // garbage-collected with the CR), and uses resourceNames to narrow grants to
 // the exact objects involved.
 // buildPlannerRules returns the narrow rules granted to the per-CR planner
-// Role: RBG get/patch on its own RBG plus scale patch on the two role
-// adapters.
+// Role: RBG get on its own RBG (for the current-replica comparison) plus
+// scale patch on the two role adapters. Direct RBG replica patching is not
+// granted — scaling goes exclusively through the adapter scale subresource.
 func buildPlannerRules(name, prefillRole, decodeRole string) []rbacv1.PolicyRule {
 	return []rbacv1.PolicyRule{
 		{
 			APIGroups:     []string{rbgGroup},
 			Resources:     []string{rbgPlural},
-			Verbs:         []string{"get", "patch"},
+			Verbs:         []string{"get"},
 			ResourceNames: []string{name},
 		},
 		{
@@ -452,13 +496,19 @@ func (r *AutoScalerReconciler) ensureRBAC(ctx context.Context, ras *unstructured
 				OwnerReferences: []metav1.OwnerReference{ownerRef(ras)},
 			},
 		}
-		if err := r.createOrUpdate(ctx, sa, func() {}); err != nil {
+		stampManagedLabels(sa)
+		if err := r.createOrVerify(ctx, sa, func(existing client.Object) error {
+			if !isOwnedBy(existing.GetOwnerReferences(), ras.GetUID()) {
+				return fmt.Errorf("ServiceAccount %s exists but is not owned by AutoScaler %s; refusing to adopt it", saName, name)
+			}
+			return nil
+		}); err != nil {
 			return fmt.Errorf("ensure ServiceAccount %s: %w", saName, err)
 		}
 	}
 
 	newRole := func(saName string, rules []rbacv1.PolicyRule) *rbacv1.Role {
-		return &rbacv1.Role{
+		role := &rbacv1.Role{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:            saName,
 				Namespace:       namespace,
@@ -466,6 +516,8 @@ func (r *AutoScalerReconciler) ensureRBAC(ctx context.Context, ras *unstructured
 			},
 			Rules: rules,
 		}
+		stampManagedLabels(role)
+		return role
 	}
 
 	// Always rewrite the rules so spec role renames propagate.
@@ -482,17 +534,25 @@ func (r *AutoScalerReconciler) ensureRBAC(ctx context.Context, ras *unstructured
 	}
 
 	for _, saName := range []string{plannerSA, profilerSA} {
+		wantRoleRef := rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "Role",
+			Name:     saName,
+		}
+		wantSubjects := []rbacv1.Subject{
+			{
+				Kind:      "ServiceAccount",
+				Name:      saName,
+				Namespace: namespace,
+			},
+		}
 		rb := &rbacv1.RoleBinding{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:            saName,
 				Namespace:       namespace,
 				OwnerReferences: []metav1.OwnerReference{ownerRef(ras)},
 			},
-			RoleRef: rbacv1.RoleRef{
-				APIGroup: "rbac.authorization.k8s.io",
-				Kind:     "Role",
-				Name:     saName,
-			},
+			RoleRef: wantRoleRef,
 			Subjects: []rbacv1.Subject{
 				{
 					Kind:      "ServiceAccount",
@@ -501,15 +561,18 @@ func (r *AutoScalerReconciler) ensureRBAC(ctx context.Context, ras *unstructured
 				},
 			},
 		}
-		if err := r.createOrUpdate(ctx, rb, func() {
-			rb.RoleRef = rbacv1.RoleRef{
-				APIGroup: "rbac.authorization.k8s.io",
-				Kind:     "Role",
-				Name:     saName,
+		stampManagedLabels(rb)
+		if err := r.createOrVerify(ctx, rb, func(existing client.Object) error {
+			existingRB, ok := existing.(*rbacv1.RoleBinding)
+			if !ok {
+				return fmt.Errorf("RoleBinding %s exists with unexpected kind %T", saName, existing)
 			}
-			rb.Subjects = []rbacv1.Subject{
-				{Kind: "ServiceAccount", Name: saName, Namespace: namespace},
+			if !isOwnedBy(existingRB.OwnerReferences, ras.GetUID()) ||
+				existingRB.RoleRef != wantRoleRef ||
+				!reflect.DeepEqual(existingRB.Subjects, wantSubjects) {
+				return fmt.Errorf("RoleBinding %s exists with unexpected content; refusing to modify it", saName)
 			}
+			return nil
 		}); err != nil {
 			return fmt.Errorf("ensure RoleBinding %s: %w", saName, err)
 		}
@@ -695,8 +758,9 @@ func (r *AutoScalerReconciler) createProfilingJob(ctx context.Context, ras *unst
 			},
 		},
 	}
+	stampManagedLabels(job)
 
-	return r.Create(ctx, job)
+	return r.createManaged(ctx, job)
 }
 
 // --- Planner Deployment ---
@@ -769,13 +833,17 @@ func (r *AutoScalerReconciler) ensurePlannerDeployment(ctx context.Context, ras 
 			},
 		},
 	}
+	// Stamp after construction so the selector MatchLabels stay untouched
+	// (Deployment selectors are immutable); template labels may gain extras.
+	stampManagedLabels(desired)
+	stampManagedLabels(&desired.Spec.Template)
 
 	// Check if Deployment already exists.
 	existing := &appsv1.Deployment{}
 	err := r.Get(ctx, types.NamespacedName{Name: deployName, Namespace: namespace}, existing)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.Create(ctx, desired)
+			return r.createManaged(ctx, desired)
 		}
 		return err
 	}
@@ -1066,12 +1134,53 @@ func ownerRef(ras *unstructured.Unstructured) metav1.OwnerReference {
 	}
 }
 
+// createOrVerify creates obj, or verifies an existing object carries the
+// expected content. It never modifies an existing object: content that is
+// fully derived from the AutoScaler name (ServiceAccount, RoleBinding) must
+// not be adopted or rewritten, otherwise workloads would run under an
+// unexpected identity.
+// createManaged creates obj and enriches an AlreadyExists conflict with a
+// migration hint: an existing object without the managed label is invisible
+// to the label-filtered cache, so the reconciler only discovers it at
+// Create time.
+func (r *AutoScalerReconciler) createManaged(ctx context.Context, obj client.Object) error {
+	err := r.Create(ctx, obj)
+	if err != nil && apierrors.IsAlreadyExists(err) {
+		return fmt.Errorf(
+			"%s %q exists but is invisible to the label-filtered cache: it lacks the managed label %s=%s; relabel or delete it so the operator can (re)create it: %w",
+			obj.GetObjectKind().GroupVersionKind().Kind, obj.GetName(), ManagedLabelKey, ManagedLabelValue, err,
+		)
+	}
+	return err
+}
+
+func (r *AutoScalerReconciler) createOrVerify(ctx context.Context, obj client.Object, verify func(existing client.Object) error) error {
+	key := types.NamespacedName{Name: obj.GetName(), Namespace: obj.GetNamespace()}
+	err := r.Get(ctx, key, obj)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return r.createManaged(ctx, obj)
+		}
+		return err
+	}
+	return verify(obj)
+}
+
+func isOwnedBy(refs []metav1.OwnerReference, uid types.UID) bool {
+	for _, ref := range refs {
+		if ref.UID == uid {
+			return true
+		}
+	}
+	return false
+}
+
 func (r *AutoScalerReconciler) createOrUpdate(ctx context.Context, obj client.Object, mutateFn func()) error {
 	key := types.NamespacedName{Name: obj.GetName(), Namespace: obj.GetNamespace()}
 	err := r.Get(ctx, key, obj)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.Create(ctx, obj)
+			return r.createManaged(ctx, obj)
 		}
 		return err
 	}
@@ -1205,10 +1314,60 @@ const (
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *AutoScalerReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	rbgGVK := schema.GroupVersionKind{
+		Group:   rbgGroup,
+		Version: rbgVersion,
+		Kind:    "RoleBasedGroup",
+	}
+	rbgObj := &unstructured.Unstructured{}
+	rbgObj.SetGroupVersionKind(rbgGVK)
+
+	// RBG name == AutoScaler name == namespace, so an RBG event maps to the
+	// same-name AutoScaler reconcile request. This gives immediate reaction to
+	// RBG readiness/label/replica changes instead of the 30s poll requeues.
+	rbgHandler := handler.EnqueueRequestsFromMapFunc(func(ctx context.Context, obj client.Object) []reconcile.Request {
+		return []reconcile.Request{{
+			NamespacedName: types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()},
+		}}
+	})
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&rbgv1alpha1.AutoScaler{}).
 		Owns(&appsv1.Deployment{}).
 		Owns(&batchv1.Job{}).
+		Watches(rbgObj, rbgHandler).
 		Named("autoscaler").
 		Complete(r)
+}
+
+// validateScalingAdapters returns an error naming every requested pattern role
+// whose RBG role does not enable the scaling adapter. The scalingadapter scale
+// subresource is the only supported scaling path — the planner holds no
+// permission to patch rolebasedgroups directly, so an adapter-less RBG can
+// never be scaled.
+func validateScalingAdapters(rbg *unstructured.Unstructured, roleNames ...string) error {
+	roles, found, _ := unstructured.NestedSlice(rbg.Object, "spec", "roles")
+	enabledByName := map[string]bool{}
+	if found {
+		for _, r := range roles {
+			role, ok := r.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			name, _, _ := unstructured.NestedString(role, "name")
+			enabled, _, _ := unstructured.NestedBool(role, "scalingAdapter", "enable")
+			enabledByName[name] = enabled
+		}
+	}
+
+	var missing []string
+	for _, roleName := range roleNames {
+		if !enabledByName[roleName] {
+			missing = append(missing, roleName)
+		}
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("roles %v do not enable scalingAdapter (set spec.roles[].scalingAdapter.enable: true); scaling is only possible through the RoleBasedGroupScalingAdapter scale subresource", missing)
+	}
+	return nil
 }

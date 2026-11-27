@@ -6,8 +6,9 @@
 """RBG Kubernetes connector for applying scaling decisions.
 
 Adapted from dynamo/planner/kubernetes_connector.py + kube.py.
-Scales RBG roles via RBGSA (RoleBasedGroupScalingAdapter) scale subresource,
-with fallback to direct RBG spec.roles[].replicas patching.
+Scales RBG roles exclusively via the RBGSA (RoleBasedGroupScalingAdapter)
+scale subresource — direct RBG spec.roles[].replicas patching is not
+supported and the planner holds no permission for it.
 """
 
 import asyncio
@@ -23,6 +24,7 @@ from rbg_planner.utils.exceptions import (
     EmptyTargetReplicasError,
     RBGNotFoundError,
     RoleNotFoundError,
+    ScalingAdapterNotFoundError,
 )
 
 logger = logging.getLogger(__name__)
@@ -43,7 +45,7 @@ def _get_current_namespace() -> str:
 
 
 class RBGConnector(PlannerConnector):
-    """Connector that scales RBG roles via RBGSA or direct RBG patch."""
+    """Connector that scales RBG roles via the RBGSA scale subresource."""
 
     def __init__(
         self,
@@ -98,8 +100,12 @@ class RBGConnector(PlannerConnector):
                 return status
         return None
 
-    def _try_scale_via_rbgsa(self, role_name: str, replicas: int) -> bool:
-        """Try to scale via RBGSA scale subresource. Returns True if successful."""
+    def _scale_via_rbgsa(self, role_name: str, replicas: int):
+        """Scale a role through the RBGSA scale subresource.
+
+        This is the only supported scaling path. A 404 means the RBG role does
+        not enable its scaling adapter — raise instead of falling back.
+        """
         # RBGSA naming convention: <rbg-name>-<role-name>
         adapter_name = f"{self.rbg_name}-{role_name}"
         try:
@@ -112,50 +118,10 @@ class RBGConnector(PlannerConnector):
                 body={"spec": {"replicas": replicas}},
             )
             logger.info(f"Scaled RBGSA {adapter_name} to {replicas} replicas")
-            return True
         except client.ApiException as e:
             if e.status == 404:
-                logger.debug(f"RBGSA {adapter_name} not found, will fall back to RBG patch")
-                return False
+                raise ScalingAdapterNotFoundError(adapter_name, role_name) from e
             raise
-
-    def _patch_rbg_role_replicas(self, role_name: str, replicas: int):
-        """Fallback: directly patch RBG spec.roles[].replicas."""
-        rbg = self._get_rbg()
-        roles = rbg.get("spec", {}).get("roles", [])
-
-        role_index = None
-        for i, role in enumerate(roles):
-            if role.get("name") == role_name:
-                role_index = i
-                break
-
-        if role_index is None:
-            raise RoleNotFoundError(role_name, self.rbg_name)
-
-        # Use JSON patch to update the specific role's replicas
-        patch = [
-            {
-                "op": "replace",
-                "path": f"/spec/roles/{role_index}/replicas",
-                "value": replicas,
-            }
-        ]
-        self.custom_api.patch_namespaced_custom_object(
-            group=RBG_GROUP,
-            version=RBG_VERSION,
-            namespace=self.namespace,
-            plural=RBG_PLURAL,
-            name=self.rbg_name,
-            body=patch,
-            _content_type="application/json-patch+json",
-        )
-        logger.info(f"Patched RBG {self.rbg_name} role {role_name} to {replicas} replicas")
-
-    def _scale_role(self, role_name: str, replicas: int):
-        """Scale a role: try RBGSA first, fall back to RBG patch."""
-        if not self._try_scale_via_rbgsa(role_name, replicas):
-            self._patch_rbg_role_replicas(role_name, replicas)
 
     async def set_replicas(self, target_replicas: list[TargetReplica], blocking: bool = True):
         if not target_replicas:
@@ -167,12 +133,12 @@ class RBGConnector(PlannerConnector):
             return
 
         for target in target_replicas:
-            # Check current replicas to avoid unnecessary patches
+            # Check current replicas to avoid unnecessary scale calls
             role = self._get_role_from_rbg(rbg, target.role_name)
             current_replicas = role.get("replicas", 0)
             if current_replicas != target.desired_replicas:
                 logger.info(f"Scaling role {target.role_name}: {current_replicas} -> {target.desired_replicas}")
-                self._scale_role(target.role_name, target.desired_replicas)
+                self._scale_via_rbgsa(target.role_name, target.desired_replicas)
             else:
                 logger.info(f"Role {target.role_name} already at {target.desired_replicas} replicas")
 

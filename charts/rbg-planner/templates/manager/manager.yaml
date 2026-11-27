@@ -39,6 +39,9 @@ spec:
         {{- if .Values.prometheus.endpoint }}
         - --prometheus-endpoint={{ .Values.prometheus.endpoint }}
         {{- end }}
+        {{- if .Values.rbgWatchLabelSelector }}
+        - --rbg-watch-label-selector={{ .Values.rbgWatchLabelSelector }}
+        {{- end }}
         ports:
         - name: metrics
           containerPort: {{ .Values.metrics.port }}

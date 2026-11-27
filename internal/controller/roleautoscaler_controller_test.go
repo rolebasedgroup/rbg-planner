@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -33,8 +34,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/yaml"
 )
 
@@ -653,8 +657,8 @@ func TestEnsureRBAC_CreatesSeparatePlannerAndProfilerIdentities(t *testing.T) {
 	if rbgRule == nil {
 		t.Fatalf("planner Role must grant rolebasedgroups access, got %+v", plannerRole.Rules)
 	}
-	if !hasVerb(rbgRule.Verbs, "get") || !hasVerb(rbgRule.Verbs, "patch") || hasVerb(rbgRule.Verbs, "list") {
-		t.Errorf("planner rolebasedgroups verbs must be exactly get;patch, got %v", rbgRule.Verbs)
+	if !hasVerb(rbgRule.Verbs, "get") || hasVerb(rbgRule.Verbs, "patch") || hasVerb(rbgRule.Verbs, "list") {
+		t.Errorf("planner rolebasedgroups verbs must be exactly get, got %v", rbgRule.Verbs)
 	}
 	if len(rbgRule.ResourceNames) != 1 || rbgRule.ResourceNames[0] != "test-rbg" {
 		t.Errorf("planner rolebasedgroups must be limited to the RBG name, got %v", rbgRule.ResourceNames)
@@ -816,6 +820,74 @@ func TestEnsureRBAC_UpdatesResourceNamesWhenRoleNamesChange(t *testing.T) {
 	}
 }
 
+// --- create-only semantics for immutable RBAC objects ---
+
+func TestEnsureRBAC_RejectsForeignServiceAccount(t *testing.T) {
+	scheme := newRBACTestScheme(t)
+	ras := newTestRAS()
+
+	foreign := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-rbg-planner", Namespace: "test-ns"},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(foreign).Build()
+	r := &AutoScalerReconciler{Client: cl, Scheme: scheme}
+
+	spec := &parsedSpec{prefillRoleName: "p-engine", decodeRoleName: "d-engine"}
+	err := r.ensureRBAC(context.Background(), ras, spec)
+	if err == nil {
+		t.Fatal("ensureRBAC must refuse a ServiceAccount not owned by the AutoScaler, got nil error")
+	}
+	if !strings.Contains(err.Error(), "test-rbg-planner") {
+		t.Errorf("error must name the conflicting ServiceAccount, got: %v", err)
+	}
+
+	got := &corev1.ServiceAccount{}
+	if err := cl.Get(context.Background(),
+		types.NamespacedName{Name: "test-rbg-planner", Namespace: "test-ns"}, got); err != nil {
+		t.Fatalf("foreign ServiceAccount must be left in place, got: %v", err)
+	}
+	if len(got.OwnerReferences) != 0 {
+		t.Errorf("foreign ServiceAccount must not be adopted, got ownerRefs %+v", got.OwnerReferences)
+	}
+}
+
+func TestEnsureRBAC_RejectsMismatchedRoleBinding(t *testing.T) {
+	scheme := newRBACTestScheme(t)
+	ras := newTestRAS()
+
+	foreign := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-rbg-planner", Namespace: "test-ns"},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "Role",
+			Name:     "test-rbg-planner",
+		},
+		Subjects: []rbacv1.Subject{
+			{Kind: "ServiceAccount", Name: "other-sa", Namespace: "test-ns"},
+		},
+	}
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(foreign).Build()
+	r := &AutoScalerReconciler{Client: cl, Scheme: scheme}
+
+	spec := &parsedSpec{prefillRoleName: "p-engine", decodeRoleName: "d-engine"}
+	err := r.ensureRBAC(context.Background(), ras, spec)
+	if err == nil {
+		t.Fatal("ensureRBAC must refuse a mismatched RoleBinding, got nil error")
+	}
+	if !strings.Contains(err.Error(), "test-rbg-planner") {
+		t.Errorf("error must name the conflicting RoleBinding, got: %v", err)
+	}
+
+	got := &rbacv1.RoleBinding{}
+	if err := cl.Get(context.Background(),
+		types.NamespacedName{Name: "test-rbg-planner", Namespace: "test-ns"}, got); err != nil {
+		t.Fatalf("mismatched RoleBinding must be left in place, got: %v", err)
+	}
+	if len(got.Subjects) != 1 || got.Subjects[0].Name != "other-sa" {
+		t.Errorf("mismatched RoleBinding must not be rewritten, got subjects %+v", got.Subjects)
+	}
+}
+
 func TestCreateProfilingJob_UsesProfilerServiceAccount(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := batchv1.AddToScheme(scheme); err != nil {
@@ -905,6 +977,139 @@ func TestOperatorClusterRoleCoversDelegatedRules(t *testing.T) {
 		if err := covers(rule); err != nil {
 			t.Error(err)
 		}
+	}
+}
+
+// --- operator ClusterRole minimal verbs contract ---
+//
+// Beyond covering the delegated rules, the generated operator role must stay
+// at its least-privilege floor: no update/delete on objects whose content is
+// immutable after creation, no delete on GC-managed objects, and no patch on
+// rolebasedgroups (scaling goes exclusively through the scalingadapter scale
+// subresource). list/watch is present on the informer-served resources; the
+// optional --rbg-watch-label-selector narrows the RBG list/watch stream.
+func TestOperatorClusterRoleMinimalVerbs(t *testing.T) {
+	data, err := os.ReadFile("../../config/rbac/role.yaml")
+	if err != nil {
+		t.Fatalf("failed to read generated operator role: %v", err)
+	}
+	operatorRole := &rbacv1.ClusterRole{}
+	if err := yaml.UnmarshalStrict(data, operatorRole); err != nil {
+		t.Fatalf("failed to parse config/rbac/role.yaml: %v", err)
+	}
+
+	cases := []struct {
+		group    string
+		resource string
+		verbs    []string
+	}{
+		{"", "serviceaccounts", []string{"create", "get", "list", "watch"}},
+		{"", "configmaps", []string{"create", "get", "list", "update", "watch"}},
+		{"", "events", []string{"create", "patch"}},
+		{"apps", "deployments", []string{"create", "get", "list", "update", "watch"}},
+		{"batch", "jobs", []string{"create", "delete", "get", "list", "watch"}},
+		{"rbac.authorization.k8s.io", "roles", []string{"create", "get", "list", "update", "watch"}},
+		{"rbac.authorization.k8s.io", "rolebindings", []string{"create", "get", "list", "watch"}},
+		{"workloads.x-k8s.io", "rolebasedgroups", []string{"get", "list", "watch"}},
+		{"workloads.x-k8s.io", "rolebasedgroupscalingadapters/scale", []string{"patch"}},
+		{"inference-extension.rolebasedgroup.io", "autoscalers", []string{"get", "list", "patch", "update", "watch"}},
+	}
+
+	for _, c := range cases {
+		rule := findRule(operatorRole.Rules, c.resource)
+		if rule == nil {
+			t.Errorf("operator role has no rule for %s/%s", c.group, c.resource)
+			continue
+		}
+		if !reflect.DeepEqual(sortVerbs(rule.Verbs), sortVerbs(c.verbs)) {
+			t.Errorf("operator verbs for %s/%s = %v, want exactly %v", c.group, c.resource, rule.Verbs, c.verbs)
+		}
+	}
+}
+
+func sortVerbs(verbs []string) []string {
+	sorted := append([]string(nil), verbs...)
+	sort.Strings(sorted)
+	return sorted
+}
+
+// --- scaling adapter precheck ---
+//
+// The scalingadapter scale subresource is the only supported scaling path;
+// direct RoleBasedGroup replica patching is not. Reconcile must refuse to
+// provision identities for a pattern role whose scaling adapter is disabled.
+
+func rbgWithRoles(roles ...map[string]any) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "workloads.x-k8s.io",
+		Version: "v1alpha2",
+		Kind:    "RoleBasedGroup",
+	})
+	ifaceRoles := make([]interface{}, len(roles))
+	for i, r := range roles {
+		ifaceRoles[i] = r
+	}
+	u.Object = map[string]any{"spec": map[string]any{"roles": ifaceRoles}}
+	return u
+}
+
+func TestValidateScalingAdapters(t *testing.T) {
+	withAdapter := map[string]any{
+		"name":           "prefill",
+		"scalingAdapter": map[string]any{"enable": true},
+	}
+	withoutAdapter := map[string]any{"name": "decode"}
+	adapterDisabled := map[string]any{
+		"name":           "decode",
+		"scalingAdapter": map[string]any{"enable": false},
+	}
+
+	cases := []struct {
+		name    string
+		roles   []map[string]any
+		wantErr string
+	}{
+		{
+			name: "both roles enabled",
+			roles: []map[string]any{withAdapter, map[string]any{
+				"name":           "decode",
+				"scalingAdapter": map[string]any{"enable": true},
+			}},
+		},
+		{
+			name:    "decode missing adapter",
+			roles:   []map[string]any{withAdapter, withoutAdapter},
+			wantErr: "decode",
+		},
+		{
+			name:    "decode adapter disabled",
+			roles:   []map[string]any{withAdapter, adapterDisabled},
+			wantErr: "decode",
+		},
+		{
+			name:    "role not defined in RBG",
+			roles:   []map[string]any{withAdapter},
+			wantErr: "decode",
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := validateScalingAdapters(rbgWithRoles(c.roles...), "prefill", "decode")
+			if c.wantErr == "" {
+				if err != nil {
+					t.Fatalf("expected no error, got %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error mentioning %q, got nil", c.wantErr)
+			}
+			if !strings.Contains(err.Error(), c.wantErr) {
+				t.Fatalf("error %q does not mention role %q", err.Error(), c.wantErr)
+			}
+		})
 	}
 }
 
@@ -1649,5 +1854,151 @@ func TestShouldShortCircuitFailed(t *testing.T) {
 				t.Errorf("shouldShortCircuitFailed() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestEnsureRBAC_StampManagedLabels(t *testing.T) {
+	scheme := newRBACTestScheme(t)
+	ras := newTestRAS()
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &AutoScalerReconciler{Client: cl, Scheme: scheme}
+
+	spec := &parsedSpec{prefillRoleName: "p-engine", decodeRoleName: "d-engine"}
+	if err := r.ensureRBAC(context.Background(), ras, spec); err != nil {
+		t.Fatalf("ensureRBAC failed: %v", err)
+	}
+
+	for _, name := range []string{"test-rbg-planner", "test-rbg-profiler"} {
+		sa := &corev1.ServiceAccount{}
+		if err := cl.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "test-ns"}, sa); err != nil {
+			t.Fatalf("failed to get SA %s: %v", name, err)
+		}
+		if got := sa.Labels["rbg-planner.io/managed"]; got != "true" {
+			t.Errorf("SA %s labels = %v, want managed label", name, sa.Labels)
+		}
+		role := &rbacv1.Role{}
+		if err := cl.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "test-ns"}, role); err != nil {
+			t.Fatalf("failed to get Role %s: %v", name, err)
+		}
+		if got := role.Labels["rbg-planner.io/managed"]; got != "true" {
+			t.Errorf("Role %s labels = %v, want managed label", name, role.Labels)
+		}
+		rb := &rbacv1.RoleBinding{}
+		if err := cl.Get(context.Background(), types.NamespacedName{Name: name, Namespace: "test-ns"}, rb); err != nil {
+			t.Fatalf("failed to get RoleBinding %s: %v", name, err)
+		}
+		if got := rb.Labels["rbg-planner.io/managed"]; got != "true" {
+			t.Errorf("RoleBinding %s labels = %v, want managed label", name, rb.Labels)
+		}
+	}
+}
+
+func TestCreateProfilingJob_ManagedLabels(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := batchv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add batch scheme: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add core scheme: %v", err)
+	}
+
+	ras := newTestRAS()
+	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &AutoScalerReconciler{Client: cl, Scheme: scheme}
+
+	spec := &parsedSpec{
+		profilingImage: "ghcr.io/rolebasedgroup/rbg-profiler:latest",
+		backend:        "sglang-oai",
+	}
+	if err := r.createProfilingJob(context.Background(), ras, spec, "test-rbg-profiling", "test-rbg-profiling"); err != nil {
+		t.Fatalf("createProfilingJob failed: %v", err)
+	}
+
+	created := &batchv1.Job{}
+	if err := cl.Get(context.Background(), types.NamespacedName{Name: "test-rbg-profiling", Namespace: "test-ns"}, created); err != nil {
+		t.Fatalf("failed to get created job: %v", err)
+	}
+	if got := created.Labels["rbg-planner.io/managed"]; got != "true" {
+		t.Errorf("Job labels = %v, want managed label", created.Labels)
+	}
+
+	// The managed label on the result ConfigMap is stamped by the profiler
+	// itself (a cross-component convention), not injected via CLI args.
+	args := created.Spec.Template.Spec.Containers[0].Args
+	for i, a := range args {
+		if a == "--result-label" || a == "--output-label" {
+			t.Errorf("args[%d] = %q: the profiler stamps the managed label itself, no label arg expected: %v", i, a, args)
+		}
+	}
+}
+
+func TestEnsurePlannerDeployment_StampManagedLabels(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := appsv1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add apps scheme: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add core scheme: %v", err)
+	}
+
+	ras := newTestRAS()
+	cl := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &AutoScalerReconciler{Client: cl, Scheme: scheme}
+
+	spec := &parsedSpec{plannerImage: "ghcr.io/rolebasedgroup/rbg-planner:latest"}
+	if err := r.ensurePlannerDeployment(context.Background(), ras, spec, "test-profiling-cm", 1, 1); err != nil {
+		t.Fatalf("ensurePlannerDeployment failed: %v", err)
+	}
+
+	created := &appsv1.Deployment{}
+	if err := cl.Get(context.Background(), types.NamespacedName{Name: "test-rbg-planner", Namespace: "test-ns"}, created); err != nil {
+		t.Fatalf("failed to get created deployment: %v", err)
+	}
+	if got := created.Labels["rbg-planner.io/managed"]; got != "true" {
+		t.Errorf("Deployment labels = %v, want managed label", created.Labels)
+	}
+	if got := created.Spec.Template.Labels["rbg-planner.io/managed"]; got != "true" {
+		t.Errorf("Deployment pod template labels = %v, want managed label", created.Spec.Template.Labels)
+	}
+}
+
+func TestCreateOrVerify_AlreadyExistsWithManagedLabelsHintsMigration(t *testing.T) {
+	scheme := newRBACTestScheme(t)
+	ras := newTestRAS()
+
+	existing := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            "test-rbg-planner",
+			Namespace:       "test-ns",
+			OwnerReferences: []metav1.OwnerReference{ownerRef(ras)},
+		},
+	}
+
+	// Simulate a label-filtered cache: the unlabeled object is invisible to
+	// Get (NotFound) but Create still collides with it on the API server.
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(existing).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				return apierrors.NewNotFound(schema.GroupResource{}, key.Name)
+			},
+		}).Build()
+	r := &AutoScalerReconciler{Client: cl, Scheme: scheme}
+
+	sa := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-rbg-planner", Namespace: "test-ns"},
+	}
+	err := r.createOrVerify(context.Background(), sa, func(existing client.Object) error { return nil })
+	if err == nil {
+		t.Fatal("expected AlreadyExists error, got nil")
+	}
+	if !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("expected wrapped AlreadyExists error, got: %v", err)
+	}
+	for _, hint := range []string{"rbg-planner.io/managed", "label", "test-rbg-planner"} {
+		if !strings.Contains(err.Error(), hint) {
+			t.Errorf("error %q should mention %q", err, hint)
+		}
 	}
 }
